@@ -60,6 +60,25 @@ function post(m: unknown, transfer?: Transferable[]) {
 let backendReady: Promise<string> | null = null;
 let forcedBackend: 'webgl' | 'cpu' | null = null;
 
+/** Best-effort GPU name for the Engine badge tooltip (WebGL only). */
+function gpuRenderer(): string | undefined {
+  try {
+    const b = tf.backend() as unknown as {
+      gpgpu?: { gl?: WebGLRenderingContext };
+      renderer?: { gl?: WebGLRenderingContext };
+      gl?: WebGLRenderingContext;
+    };
+    const gl = b?.gpgpu?.gl ?? b?.renderer?.gl ?? b?.gl ?? null;
+    if (!gl) return undefined;
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    if (!ext) return undefined;
+    const s = String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) ?? '').trim();
+    return s ? s.slice(0, 90) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function initBackend(hint?: 'webgl' | 'cpu'): Promise<string> {
   if (hint && forcedBackend !== hint) {
     // a stall watchdog retry can demand a different backend mid-session
@@ -85,7 +104,7 @@ function initBackend(hint?: 'webgl' | 'cpu'): Promise<string> {
         }
         await tf.ready();
       }
-      post({ type: 'backend', backend: tf.getBackend() });
+      post({ type: 'backend', backend: tf.getBackend(), renderer: gpuRenderer() });
       return tf.getBackend();
     })();
   }
@@ -382,7 +401,9 @@ async function handleUpscale(msg: Extract<WorkerInMessage, { type: 'upscale' }>)
     // Read the GPU tensor back in horizontal strips: one giant readPixels can
     // wedge slow/software GPUs with zero feedback (and starve the stall
     // watchdog) — strips keep messages flowing and tick a Finalizing %.
-    const strips = Math.min(8, Math.max(1, Math.floor(h2 / 256)));
+    // Target ~64px per strip (min 1, max 8) so even short outputs get ticks:
+    // a 288px-tall result reads back in 4 strips instead of one giant call.
+    const strips = Math.min(8, Math.max(1, Math.floor(h2 / 64)));
     const rgbOut = new Float32Array(w2 * h2 * 3);
     for (let s = 0; s < strips; s++) {
       const y0 = Math.floor((h2 * s) / strips);
@@ -393,6 +414,7 @@ async function handleUpscale(msg: Extract<WorkerInMessage, { type: 'upscale' }>)
       slice.dispose();
       if (strips > 1) {
         postPhase(id, `Finalizing ${Math.round(((s + 1) / strips) * 100)}%`);
+        // strips also feed the stall watchdog via the phase handler
       }
     }
     out.dispose();

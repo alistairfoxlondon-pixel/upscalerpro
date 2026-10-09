@@ -16,6 +16,7 @@ import {
   Ban,
   Clock,
   Cpu,
+  Copy,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
@@ -27,7 +28,7 @@ import {
   resultFilename,
   useStore,
 } from '@/lib/upscaler/store';
-import { formatBytes, formatDuration } from '@/lib/upscaler/utils';
+import { formatBytes, formatDuration, copyImageToClipboard } from '@/lib/upscaler/utils';
 import type { QueueItem } from '@/lib/upscaler/store';
 import { cn } from '@/lib/utils';
 
@@ -173,6 +174,29 @@ function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
               variant="ghost"
               size="icon"
               className="h-8 w-8"
+              aria-label={`Copy ${item.name} to clipboard`}
+              title="Copy to clipboard"
+              onClick={() => {
+                void (async () => {
+                  try {
+                    await copyImageToClipboard(r.url);
+                    const { toast } = await import('sonner');
+                    toast.success('Copied to clipboard');
+                  } catch (err) {
+                    const { toast } = await import('sonner');
+                    toast.error('Could not copy', {
+                      description: err instanceof Error ? err.message : 'Clipboard unavailable',
+                    });
+                  }
+                })();
+              }}
+            >
+              <Copy className="h-4 w-4" aria-hidden />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
               aria-label={`Download ${item.name}`}
               title="Download"
               onClick={() => {
@@ -225,6 +249,7 @@ export function Queue() {
   const clearFinished = useStore((s) => s.clearFinished);
   const clearAll = useStore((s) => s.clearAll);
   const backend = useStore((s) => s.backend);
+  const gpu = useStore((s) => s.gpu);
   const totals = useStore((s) => s.totals);
 
   const doneCount = items.filter((i) => i.status === 'done').length;
@@ -240,7 +265,12 @@ export function Queue() {
   return (
     <div className="space-y-3">
       {/* batch bar */}
-      <div className="rounded-xl border bg-card/60 p-3">
+      <div
+        className={cn(
+          'rounded-xl border bg-card/60 p-3 transition-colors',
+          paused && busy && 'border-amber-500/40 bg-amber-500/5'
+        )}
+      >
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-2">
             {busy && !paused && (
@@ -283,7 +313,11 @@ export function Queue() {
 
           <div className="ml-auto flex items-center gap-2">
             {backend && (
-              <Badge variant="outline" className="gap-1 font-mono text-[10px] text-muted-foreground">
+              <Badge
+                variant="outline"
+                className="gap-1 font-mono text-[10px] text-muted-foreground"
+                title={gpu ? `GPU: ${gpu}` : undefined}
+              >
                 <Cpu className="h-3 w-3" aria-hidden />
                 {backend === 'webgl' ? 'WebGL' : backend.toUpperCase()}
               </Badge>

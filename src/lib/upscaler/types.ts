@@ -47,7 +47,7 @@ export type WorkerInMessage =
 export type ModelStatus = 'loading' | 'ready' | 'error';
 
 export type WorkerOutMessage =
-  | { type: 'backend'; backend: string }
+  | { type: 'backend'; backend: string; renderer?: string }
   | { type: 'debug'; text: string }
   | { type: 'phase'; id: string; phase: string }
   | { type: 'model-status'; preset: PresetId; scale: ScaleFactor; status: ModelStatus; message?: string }

@@ -21,6 +21,32 @@ export function formatMP(pixels: number): string {
   return `${Math.round(pixels)} px`;
 }
 
+/**
+ * Copies an image (any blob URL / format) to the clipboard as PNG —
+ * the one format the async clipboard API accepts everywhere.
+ */
+export async function copyImageToClipboard(url: string): Promise<void> {
+  if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
+    throw new Error('Clipboard image copy is not supported in this browser');
+  }
+  const src = await (await fetch(url)).blob();
+  let png = src;
+  if (src.type !== 'image/png') {
+    const bmp = await createImageBitmap(src);
+    const canvas = document.createElement('canvas');
+    canvas.width = bmp.width;
+    canvas.height = bmp.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Canvas unavailable');
+    ctx.drawImage(bmp, 0, 0);
+    bmp.close();
+    png = await new Promise<Blob>((res, rej) =>
+      canvas.toBlob((b) => (b ? res(b) : rej(new Error('PNG encoding failed'))), 'image/png')
+    );
+  }
+  await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
+}
+
 /** Generates a small WebP/PNG thumbnail object-URL from a bitmap. */
 export async function makeThumbUrl(bitmap: ImageBitmap, maxSide = 384): Promise<string> {
   const ratio = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));

@@ -38,8 +38,16 @@ export function CompareSlider({
   // refs mirror state for smooth, re-render-free gesture math
   const zoomRef = React.useRef(1);
   const panRef = React.useRef({ x: 0, y: 0 });
-  const mode = React.useRef<'divider' | 'pan' | null>(null);
+  const mode = React.useRef<'divider' | 'pan' | 'pinch' | null>(null);
   const lastPan = React.useRef({ x: 0, y: 0 });
+  // multi-touch pinch state: every active pointer + the gesture origin
+  const pointers = React.useRef(new Map<number, { x: number; y: number }>());
+  const pinch = React.useRef<{
+    startDist: number;
+    startZoom: number;
+    startPan: { x: number; y: number };
+    startMid: { x: number; y: number };
+  } | null>(null);
 
   // reset when a different image pair is shown
   React.useEffect(() => {
@@ -113,7 +121,11 @@ export function CompareSlider({
 
   const beginGesture = (e: React.PointerEvent, m: 'divider' | 'pan') => {
     mode.current = m;
-    containerRef.current?.setPointerCapture?.(e.pointerId);
+    try {
+      containerRef.current?.setPointerCapture?.(e.pointerId);
+    } catch {
+      /* best-effort — capture can throw for inactive/synthetic pointer ids */
+    }
     if (m === 'divider') {
       setFromClientX(e.clientX);
     } else {
@@ -122,10 +134,58 @@ export function CompareSlider({
   };
 
   const onPointerDown = (e: React.PointerEvent) => {
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    try {
+      containerRef.current?.setPointerCapture?.(e.pointerId);
+    } catch {
+      /* best-effort — capture can throw for inactive/synthetic pointer ids */
+    }
+    if (pointers.current.size === 2) {
+      // second finger landed — override any divider/pan gesture with a pinch
+      mode.current = 'pinch';
+      const [a, b] = [...pointers.current.values()];
+      pinch.current = {
+        startDist: Math.hypot(a.x - b.x, a.y - b.y) || 1,
+        startZoom: zoomRef.current,
+        startPan: { ...panRef.current },
+        startMid: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 },
+      };
+      return;
+    }
     // zoomed: drag pans the image; the divider grab pad opts out via stopPropagation
     beginGesture(e, zoomRef.current > 1 ? 'pan' : 'divider');
   };
   const onPointerMove = (e: React.PointerEvent) => {
+    if (mode.current === 'pinch') {
+      if (pointers.current.has(e.pointerId)) {
+        pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      }
+      const p = pinch.current;
+      if (!p || pointers.current.size < 2) return;
+      const [a, b] = [...pointers.current.values()];
+      const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+      const nextZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, p.startZoom * (dist / p.startDist)));
+      const el = containerRef.current;
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        // keep the content point that started under the initial midpoint
+        // anchored to the live midpoint: pan = mid - center - k·(startMid - center - startPan)
+        const k = nextZoom / p.startZoom;
+        const next = clampPan(
+          mid.x - rect.left - rect.width / 2 -
+            k * (p.startMid.x - rect.left - rect.width / 2 - p.startPan.x),
+          mid.y - rect.top - rect.height / 2 -
+            k * (p.startMid.y - rect.top - rect.height / 2 - p.startPan.y),
+          nextZoom
+        );
+        zoomRef.current = nextZoom;
+        panRef.current = next;
+        setZoom(nextZoom);
+        setPan(next);
+      }
+      return;
+    }
     if (!mode.current) return;
     if (mode.current === 'divider') {
       setFromClientX(e.clientX);
@@ -140,7 +200,20 @@ export function CompareSlider({
       setPan(next);
     }
   };
-  const stop = () => {
+  const stop = (e?: React.PointerEvent) => {
+    if (e) pointers.current.delete(e.pointerId);
+    if (mode.current === 'pinch') {
+      pinch.current = null;
+      // one finger left on the glass → keep panning with it when zoomed
+      const rest = [...pointers.current.values()];
+      if (rest.length === 1 && zoomRef.current > 1) {
+        mode.current = 'pan';
+        lastPan.current = { x: rest[0].x, y: rest[0].y };
+      } else if (rest.length === 0) {
+        mode.current = null;
+      }
+      return;
+    }
     mode.current = null;
   };
 
@@ -181,10 +254,10 @@ export function CompareSlider({
         onPointerMove={onPointerMove}
         onPointerUp={stop}
         onPointerCancel={stop}
-        onPointerLeave={stop}
+        onPointerLeave={(e) => stop(e)}
         className={cn(
-          'group relative select-none overflow-hidden rounded-xl border bg-[repeating-conic-gradient(var(--border)_0%_25%,transparent_0%_50%)] bg-[length:16px_16px] outline-none ring-primary/50 focus-visible:ring-2',
-          zoom > 1 ? 'cursor-grab touch-none active:cursor-grabbing' : 'cursor-ew-resize'
+          'group relative touch-none select-none overflow-hidden rounded-xl border bg-[repeating-conic-gradient(var(--border)_0%_25%,transparent_0%_50%)] bg-[length:16px_16px] outline-none ring-primary/50 focus-visible:ring-2',
+          zoom > 1 ? 'cursor-grab active:cursor-grabbing' : 'cursor-ew-resize'
         )}
         style={{ aspectRatio: `${aspect}` }}
       >
@@ -297,7 +370,7 @@ export function CompareSlider({
       </div>
 
       <p className="mt-1.5 text-center text-[10px] text-muted-foreground sm:hidden">
-        Pinch-free zoom: use the controls · drag to pan when zoomed
+        Pinch to zoom · drag to pan when zoomed
       </p>
     </div>
   );

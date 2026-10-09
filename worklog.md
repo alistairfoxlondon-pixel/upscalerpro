@@ -111,3 +111,28 @@ Stage Summary:
 - Browser-verified: 8× chain (96×72→768×576), 4× regression, zoom/pan/reset in compare modal, light+dark themes, idle batch-bar buttons, session stats
 - SwiftShader note: 8× output readback is slow in headless/software-GL (~2–3 min for 442k px) but now ticks 'Finalizing N%' and feeds the watchdog; real GPUs are ms-fast
 - Risks/next: pin two-finger pinch-zoom in compare (buttons only today); 8× on Studio = two 29MB models in VRAM (works, but consider a warning when preset=studio+scale=8); Optional: remember compare-zoom preference
+
+---
+Task ID: 7
+Agent: cron-review-agent (round 4)
+Task: Status assessment + agent-browser QA, then feature/styling expansion (pinch zoom, clipboard, share, GPU tooltip, toasts)
+
+Work Log:
+- ASSESSMENT: worklog reviewed; page render ✓, zero console errors, Fast 4× sample E2E ✓ (96×72→384×288, ~19s SwiftShader), compare modal ✓, settings persistence ✓. Suspected hero a11y bug ("tocrytal clarity") verified FALSE — DOM has the space (Playwright snapshot artifact).
+- FEATURE: pinch-zoom in CompareSlider — multi-pointer Map + gesture-origin refs; zoom = distance ratio (clamped 1–6×), focal anchoring keeps the initial midpoint's content under the live midpoint (pan = mid − center − k·(startMid − center − startPan)); container now touch-none always (pinch + touch-divider both need it); one finger lifting after pinch continues as pan when zoomed. Verified via synthetic PointerEvents: spread 40%→64% = exactly scale(1.6); off-center pinch → translate(115.5px) scale(2) anchored to focal point; divider drag regression ✓ (50→75).
+- BUG #7 FIXED (robustness): setPointerCapture throws NotFoundError for inactive/synthetic pointer ids, aborting the handler before mode was set in beginGesture (divider-pad path). Both capture sites now wrapped in try/catch (best-effort). Dev-overlay 3× NotFoundError cleared; re-tested → zero new issues.
+- FEATURE: batch-complete toast — ensureLoop counts completions; on natural end (not paused) toasts "N images ready / Processed entirely on this device." with a 10s "Download ZIP" action button. Verified in browser.
+- FEATURE: copy-to-clipboard — copyImageToClipboard() in utils (fetch blob → PNG-reencode via canvas when type≠png → ClipboardItem); Copy buttons on done queue rows + compare-modal footer, success/error toasts. Verified: success toast, no error path.
+- FEATURE: Web Share on compare modal — File + navigator.canShare({files}) gate; Share button renders only when supported (hidden on desktop headless as expected; appears on mobile).
+- FEATURE: Engine GPU tooltip — worker reads WEBGL_debug_renderer_info via tf backend's gpgpu.gl (BUG #8: first attempt used renderer.gl/gl which don't exist in tfjs 4.11 — fixed after inspecting backend_webgl.js dist). Badge now tooltips e.g. "GPU: ANGLE (Google, Vulkan 1.3.0 (SwiftShader…))".
+- FEATURE: Studio+8× combined warning in settings (amber box: two ~29 MB models, Fast/Balanced safer for 8×).
+- HARDENING: readback strips now target ~64px (was 256px) — a 288px-tall output reads back in 4 strips with Finalizing % ticks instead of 1 silent giant readPixels call; strips feed the stall watchdog via phase handler.
+- STYLING: FAQ accordion triggers get rounded hover pill (px-3, hover:bg-muted/40, no-underline); session card gains "Avg / image" row; batch bar tints amber when paused+busy; compare-modal footer regridded (2-col mobile grid → sm:flex right-aligned); mobile/desktop hint duplication fixed (slider hint sm:hidden, modal hint hidden sm:block); mobile hint text now "Pinch to zoom · drag to pan when zoomed".
+- VERIFIED: watchdog recovery re-confirmed twice with new code (SwiftShader readback wedge → 300s watchdog → worker restart → CPU retry → Done; result 96×72→384×288, 12.4 KB); mobile 390px modal + grid buttons ✓; light+dark themes ✓; GPU tooltip ✓; batch toast ✓.
+- NOTE: a "stuck Loading model" scare turned out to be a stale Turbopack worker chunk after HMR — fixed by fresh browser session; not a code bug (dev.log compiles stayed clean).
+
+Stage Summary:
+- eslint 0 problems · tsc 0 errors · dev.log clean · zero new dev-overlay issues
+- New this round: two-finger pinch zoom with focal anchoring, clipboard copy everywhere, Web Share (mobile), GPU name tooltip, batch-complete toast with ZIP shortcut, Studio+8× memory warning, finer readback feedback
+- Recovery stack unchanged: awaitNextFrame → phase messages → 300s watchdog → worker restart + CPU retry → clear error (re-verified end-to-end twice this round)
+- Risks/next: SwiftShader readback wedge remains environmental (real GPUs unaffected); consider IndexedDB model cache; remember compare-zoom preference; optional EXIF-preserving JPEG export

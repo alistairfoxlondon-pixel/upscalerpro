@@ -115,6 +115,12 @@ export function SettingsPanel() {
               8× chains two AI passes (4× → 2×) for 64× more pixels — best for small images; larger ones auto-drop to 4×.
             </p>
           )}
+          {settings.scale === 8 && settings.preset === 'studio' && (
+            <p className="flex items-start gap-1.5 rounded-md bg-amber-500/10 px-2 py-1.5 text-[11px] leading-snug text-amber-600 dark:text-amber-400">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+              8× on Studio chains two ~29 MB models and needs a lot of memory — Fast or Balanced is the safer pick for 8×.
+            </p>
+          )}
         </div>
 
         {/* Output format */}

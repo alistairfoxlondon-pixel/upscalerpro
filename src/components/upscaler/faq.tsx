@@ -52,10 +52,10 @@ export function Faq() {
       <Accordion type="single" collapsible className="rounded-2xl border bg-card/60 px-4 shadow-sm">
         {faqs.map((f, i) => (
           <AccordionItem key={f.q} value={`faq-${i}`} className="last:border-b-0">
-            <AccordionTrigger className="py-4 text-left text-sm font-medium">
+            <AccordionTrigger className="rounded-lg px-3 py-4 text-left text-sm font-medium transition-colors hover:bg-muted/40 hover:no-underline [&[data-state=open]]:text-foreground">
               {f.q}
             </AccordionTrigger>
-            <AccordionContent className="pb-4 text-sm leading-relaxed text-muted-foreground">
+            <AccordionContent className="pb-4 pl-3 pr-1 text-sm leading-relaxed text-muted-foreground">
               {f.a}
             </AccordionContent>
           </AccordionItem>

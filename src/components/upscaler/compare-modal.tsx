@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Download } from 'lucide-react';
+import { Download, Copy, Share2 } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -14,7 +14,7 @@ import { Badge } from '@/components/ui/badge';
 import { CompareSlider } from './compare-slider';
 import { PRESETS } from '@/lib/upscaler/registry';
 import { downloadBlob, resultFilename, useStore } from '@/lib/upscaler/store';
-import { formatBytes, formatDuration } from '@/lib/upscaler/utils';
+import { copyImageToClipboard, formatBytes, formatDuration } from '@/lib/upscaler/utils';
 
 export function CompareModal() {
   const compareId = useStore((s) => s.compareId);
@@ -24,10 +24,50 @@ export function CompareModal() {
     items.find((i) => i.id === compareId && i.status === 'done' && i.result) ?? null;
   const r = item?.result ?? null;
 
+  const canShare =
+    typeof navigator !== 'undefined' &&
+    typeof navigator.canShare === 'function' &&
+    typeof navigator.share === 'function';
+
   const onDownload = async () => {
     if (!item || !r) return;
     const blob = await (await fetch(r.url)).blob();
     downloadBlob(blob, resultFilename(item.name, r.scale, r.format));
+  };
+
+  const onCopy = async () => {
+    if (!r) return;
+    try {
+      await copyImageToClipboard(r.url);
+      const { toast } = await import('sonner');
+      toast.success('Copied to clipboard');
+    } catch (err) {
+      const { toast } = await import('sonner');
+      toast.error('Could not copy', {
+        description: err instanceof Error ? err.message : 'Clipboard unavailable',
+      });
+    }
+  };
+
+  const onShare = async () => {
+    if (!item || !r) return;
+    try {
+      const blob = await (await fetch(r.url)).blob();
+      const file = new File([blob], resultFilename(item.name, r.scale, r.format), {
+        type: blob.type || 'image/png',
+      });
+      if (!navigator.canShare?.({ files: [file] })) {
+        throw new Error('Sharing files is not supported here');
+      }
+      await navigator.share({ files: [file], title: item.name });
+    } catch (err) {
+      if ((err as DOMException | undefined)?.name !== 'AbortError') {
+        const { toast } = await import('sonner');
+        toast.error('Could not share', {
+          description: err instanceof Error ? err.message : 'Share unavailable',
+        });
+      }
+    }
   };
 
   return (
@@ -64,12 +104,22 @@ export function CompareModal() {
                 afterLabel={`${r.scale}× upscaled`}
                 className="max-h-[56vh]"
               />
-              <p className="mt-2 text-center text-[11px] text-muted-foreground">
-                Drag the handle to compare · scroll to zoom · drag to pan when zoomed · or open full size for 1:1 pixels
+              <p className="mt-2 hidden text-center text-[11px] text-muted-foreground sm:block">
+                Drag the handle to compare · scroll or pinch to zoom · drag to pan when zoomed
               </p>
             </div>
 
-            <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
+            <div className="mt-4 grid grid-cols-2 gap-2 sm:flex sm:justify-end">
+              <Button variant="outline" onClick={() => void onCopy()}>
+                <Copy className="h-4 w-4" aria-hidden />
+                Copy
+              </Button>
+              {canShare && (
+                <Button variant="outline" onClick={() => void onShare()}>
+                  <Share2 className="h-4 w-4" aria-hidden />
+                  Share
+                </Button>
+              )}
               <Button
                 variant="outline"
                 onClick={() => window.open(r.url, '_blank', 'noopener')}

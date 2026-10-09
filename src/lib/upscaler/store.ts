@@ -83,6 +83,7 @@ interface UpscalerState {
   paused: boolean;
   activeId: string | null;
   backend: string | null;
+  gpu: string | null;
   modelKey: string | null;
   modelStatus: 'loading' | 'ready' | 'error' | null;
   modelMessage: string | null;
@@ -171,7 +172,7 @@ function wireWorker() {
     const state = useStore.getState();
     switch (m.type) {
       case 'backend':
-        useStore.setState({ backend: m.backend });
+        useStore.setState({ backend: m.backend, gpu: m.renderer ?? null });
         break;
       case 'debug':
         console.info('[pf-worker]', m.text);
@@ -348,6 +349,7 @@ async function ensureLoop() {
   if (loopRunning) return;
   loopRunning = true;
   useStore.setState({ busy: true });
+  let completed = 0;
   try {
     for (;;) {
       const s = useStore.getState();
@@ -355,10 +357,21 @@ async function ensureLoop() {
       const next = s.items.find((i) => i.status === 'queued');
       if (!next) break;
       await processItem(next.id);
+      const after = useStore.getState().items.find((i) => i.id === next.id);
+      if (after?.status === 'done') completed++;
     }
   } finally {
     loopRunning = false;
     useStore.setState({ busy: false, activeId: null });
+    // batch-complete feedback with a one-tap ZIP export
+    if (completed > 0 && !useStore.getState().paused) {
+      const { toast } = await import('sonner');
+      toast.success(completed === 1 ? '1 image ready' : `${completed} images ready`, {
+        description: 'Processed entirely on this device.',
+        action: { label: 'Download ZIP', onClick: () => void downloadAllAsZip() },
+        duration: 10_000,
+      });
+    }
   }
 }
 
@@ -382,6 +395,7 @@ export const useStore = create<UpscalerState>()(
   paused: false,
   activeId: null,
   backend: null,
+  gpu: null,
   modelKey: null,
   modelStatus: null,
   modelMessage: null,

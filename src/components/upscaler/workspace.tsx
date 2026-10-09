@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import { useStore } from '@/lib/upscaler/store';
+import { formatDuration } from '@/lib/upscaler/utils';
 import { Dropzone } from './dropzone';
 import { SettingsPanel } from './settings-panel';
 import { Queue } from './queue';
@@ -88,6 +89,10 @@ export function Workspace() {
                 <dt>Data in / out</dt>
                 <dd className="text-right font-mono text-foreground">
                   {formatBytes(totals.bytesIn, 0)} → {formatBytes(totals.bytesOut, 0)}
+                </dd>
+                <dt>Avg / image</dt>
+                <dd className="text-right font-mono text-foreground">
+                  {formatDuration(totals.ms / Math.max(1, totals.images))}
                 </dd>
               </dl>
             </div>
