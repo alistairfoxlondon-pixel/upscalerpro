@@ -1,0 +1,366 @@
+/// <reference lib="webworker" />
+/**
+ * PixelForge upscaling worker.
+ * 100% on-device neural super-resolution: TensorFlow.js (WebGL) + UpscalerJS ESRGAN models.
+ * All tensor I/O (no base64) so it runs safely inside a Web Worker.
+ */
+import * as tf from '@tensorflow/tfjs';
+import Upscaler from 'upscaler';
+import slim2 from '@upscalerjs/esrgan-slim/2x';
+import slim3 from '@upscalerjs/esrgan-slim/3x';
+import slim4 from '@upscalerjs/esrgan-slim/4x';
+import medium2 from '@upscalerjs/esrgan-medium/2x';
+import medium3 from '@upscalerjs/esrgan-medium/3x';
+import medium4 from '@upscalerjs/esrgan-medium/4x';
+import thick2 from '@upscalerjs/esrgan-thick/2x';
+import thick3 from '@upscalerjs/esrgan-thick/3x';
+import thick4 from '@upscalerjs/esrgan-thick/4x';
+import type { ModelDefinition, PresetId, ScaleFactor, WorkerInMessage } from '@/lib/upscaler/types';
+
+const PATCH_SIZE = 128;
+const PADDING = 8;
+
+ 
+let ORIGIN = '';
+function resolvePath(path: string): string {
+  if (path.startsWith('/') && ORIGIN) return `${ORIGIN}${path}`;
+  return path;
+}
+
+function withLocalPath(def: unknown, path: string): ModelDefinition {
+  return { ...(def as ModelDefinition), path: resolvePath(path) };
+}
+
+/**
+ * Slim & Medium weights are self-hosted from /public/models (privacy: zero
+ * third-party requests). The optional Studio weights (~29 MB) load from the
+ * jsDelivr/unpkg CDN on demand.
+ */
+const REGISTRY: Record<string, ModelDefinition> = {
+  'fast:2': withLocalPath(slim2, '/models/esrgan-slim/x2/model.json'),
+  'fast:3': withLocalPath(slim3, '/models/esrgan-slim/x3/model.json'),
+  'fast:4': withLocalPath(slim4, '/models/esrgan-slim/x4/model.json'),
+  'balanced:2': withLocalPath(medium2, '/models/esrgan-medium/x2/model.json'),
+  'balanced:3': withLocalPath(medium3, '/models/esrgan-medium/x3/model.json'),
+  'balanced:4': withLocalPath(medium4, '/models/esrgan-medium/x4/model.json'),
+  'studio:2': thick2 as ModelDefinition,
+  'studio:3': thick3 as ModelDefinition,
+  'studio:4': thick4 as ModelDefinition,
+};
+
+const ctx: {
+  postMessage: (m: unknown, transfer?: Transferable[]) => void;
+  addEventListener: (t: 'message', cb: (e: MessageEvent<WorkerInMessage>) => void) => void;
+} = self as any;
+
+function post(m: unknown, transfer?: Transferable[]) {
+  ctx.postMessage(m, transfer);
+}
+
+let backendReady: Promise<string> | null = null;
+let forcedBackend: 'webgl' | 'cpu' | null = null;
+
+function initBackend(hint?: 'webgl' | 'cpu'): Promise<string> {
+  if (hint && forcedBackend !== hint) {
+    // a stall watchdog retry can demand a different backend mid-session
+    forcedBackend = hint;
+    backendReady = null;
+    modelCache.clear();
+  }
+  if (!backendReady) {
+    backendReady = (async () => {
+      if (forcedBackend === 'cpu') {
+        // watchdog CPU retry — pure-JS backend, slower but rock solid
+        await tf.setBackend('cpu');
+        await tf.ready();
+      } else {
+        let backend = 'cpu';
+        try {
+          const ok = await tf.setBackend('webgl');
+          await tf.ready();
+          if (ok && tf.getBackend() === 'webgl') backend = 'webgl';
+          else await tf.setBackend('cpu');
+        } catch {
+          await tf.setBackend('cpu');
+        }
+        await tf.ready();
+      }
+      post({ type: 'backend', backend: tf.getBackend() });
+      return tf.getBackend();
+    })();
+  }
+  return backendReady;
+}
+initBackend();
+
+/* ---------------- model cache ---------------- */
+
+type UpscalerInstance = {
+  ready: Promise<void>;
+  execute: (
+    input: tf.Tensor4D,
+    options: Record<string, unknown>
+  ) => Promise<tf.Tensor3D>;
+  dispose: () => Promise<void>;
+};
+
+const modelCache = new Map<string, UpscalerInstance>();
+
+async function getModel(backend: string, preset: PresetId, scale: ScaleFactor): Promise<UpscalerInstance> {
+  const cacheKey = `${backend}:${preset}:${scale}`;
+  const cached = modelCache.get(cacheKey);
+  if (cached) return cached;
+  const def = REGISTRY[`${preset}:${scale}`];
+  if (!def) throw new Error(`Unknown model configuration ${preset}:${scale}`);
+  post({ type: 'model-status', preset, scale, status: 'loading' });
+  try {
+     
+    const upscaler = new (Upscaler as any)({
+      model: def,
+      warmupSizes: { patchSize: PATCH_SIZE, padding: PADDING },
+    }) as UpscalerInstance;
+    const t0 = performance.now();
+    await upscaler.ready;
+    console.log(`[worker] model ${cacheKey} ready in ${Math.round(performance.now() - t0)}ms`);
+    modelCache.set(cacheKey, upscaler);
+    post({ type: 'model-status', preset, scale, status: 'ready' });
+    return upscaler;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to load AI model';
+    post({ type: 'model-status', preset, scale, status: 'error', message });
+    throw err;
+  }
+}
+
+/* ---------------- cancellation ---------------- */
+
+const aborts = new Map<string, AbortController>();
+
+/* ---------------- helpers ---------------- */
+
+function isAbortError(err: unknown): boolean {
+  return (
+    (err instanceof DOMException && err.name === 'AbortError') ||
+    (err instanceof Error && (err.name === 'AbortError' || /abort/i.test(err.message)))
+  );
+}
+
+let lastProgressAt = 0;
+function postProgress(id: string, rate: number) {
+  const now = performance.now();
+  if (rate >= 1 || now - lastProgressAt > 80) {
+    lastProgressAt = now;
+    post({ type: 'progress', id, rate: Math.min(0.999, Math.max(0, rate)) });
+  }
+}
+
+async function upscaleRgbTensor(upscaler: UpscalerInstance, input: tf.Tensor4D, id: string, signal: AbortSignal): Promise<tf.Tensor3D> {
+  return (await upscaler.execute(input, {
+    output: 'tensor' as const,
+    progressOutput: 'tensor' as const,
+    patchSize: PATCH_SIZE,
+    padding: PADDING,
+    signal,
+    // yield to the event loop between patches — keeps the GPU command queue
+    // shallow (prevents readback deadlocks on software renderers) and lets
+    // cancellation + progress messages flow
+    awaitNextFrame: true,
+    progress: (amount: number, slice: unknown) => {
+      // dispose intermediate patch tensors (required when progressOutput is 'tensor')
+      if (slice && typeof (slice as tf.Tensor).dispose === 'function') {
+        (slice as tf.Tensor).dispose();
+      }
+      postProgress(id, amount);
+    },
+  })) as tf.Tensor3D;
+}
+
+function dbg(text: string) {
+  console.log(`[pf] ${text}`);
+  post({ type: 'debug', text });
+}
+
+async function handleUpscale(msg: Extract<WorkerInMessage, { type: 'upscale' }>) {
+  const { id, bitmap, scale, preset, format, quality } = msg;
+  const t0 = performance.now();
+  dbg(`job ${id.slice(0, 6)} start ${bitmap.width}x${bitmap.height} ${preset}:${scale}`);
+  const ac = new AbortController();
+  aborts.set(id, ac);
+  let out: tf.Tensor3D | null = null;
+  try {
+    await initBackend(msg.backendHint);
+    const backend = tf.getBackend();
+    const upscaler = await getModel(backend, preset, scale);
+    if (aborts.get(id) !== ac) throw new Error('Canceled');
+    dbg(`job ${id.slice(0, 6)} model ready ${Math.round(performance.now() - t0)}ms`);
+    // always announce readiness so the UI can leave the "Loading model" phase
+    // even when the model was cached
+    post({ type: 'model-status', preset, scale, status: 'ready' });
+
+    const w = bitmap.width;
+    const h = bitmap.height;
+    if (Math.max(w, h) > 8192) {
+      throw new Error('Image is too large to process in the browser (max 8192 px per side)');
+    }
+
+    // Bitmap → ImageData
+    const src = new OffscreenCanvas(w, h);
+    const srcCtx = src.getContext('2d', { willReadFrequently: true });
+    if (!srcCtx) throw new Error('OffscreenCanvas unavailable');
+    srcCtx.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    const imageData = srcCtx.getImageData(0, 0, w, h);
+
+    // Alpha detection + RGBA → RGB float tensor
+    const px = imageData.data;
+    let hasAlpha = false;
+    for (let i = 3; i < px.length; i += 4) {
+      if (px[i] !== 255) {
+        hasAlpha = true;
+        break;
+      }
+    }
+    const n = w * h;
+    const rgb = new Float32Array(n * 3);
+    for (let i = 0, j = 0; i < px.length; i += 4, j += 3) {
+      rgb[j] = px[i];
+      rgb[j + 1] = px[i + 1];
+      rgb[j + 2] = px[i + 2];
+    }
+    const input = tf.tensor4d(rgb, [1, h, w, 3]);
+    try {
+      const tExec = performance.now();
+      out = await upscaleRgbTensor(upscaler, input, id, ac.signal);
+      console.log(`[worker] execute done in ${Math.round(performance.now() - tExec)}ms (${w}x${h} -> ${out.shape[1]}x${out.shape[0]})`);
+      dbg(`job ${id.slice(0, 6)} execute done ${Math.round(performance.now() - tExec)}ms`);
+    } finally {
+      input.dispose();
+    }
+    if (aborts.get(id) !== ac) throw new Error('Canceled');
+
+    const h2 = out.shape[0] as number;
+    const w2 = out.shape[1] as number;
+    postProgress(id, 1);
+    const rgbOut = await out.data();
+    out.dispose();
+    out = null;
+    dbg(`job ${id.slice(0, 6)}` + ` data read ${Math.round(performance.now() - t0)}ms`);
+
+    // Tensor → RGBA pixels
+    const rgba = new Uint8ClampedArray(w2 * h2 * 4);
+    for (let i = 0, j = 0, k = 0; k < w2 * h2; k++, i += 3, j += 4) {
+      const r = rgbOut[i];
+      const g = rgbOut[i + 1];
+      const b = rgbOut[i + 2];
+      rgba[j] = r < 0 ? 0 : r > 255 ? 255 : r;
+      rgba[j + 1] = g < 0 ? 0 : g > 255 ? 255 : g;
+      rgba[j + 2] = b < 0 ? 0 : b > 255 ? 255 : b;
+      rgba[j + 3] = 255;
+    }
+
+    // Restore transparency by bilinearly scaling the original alpha channel.
+    if (hasAlpha) {
+      const aSrc = new OffscreenCanvas(w, h);
+      const aCtx = aSrc.getContext('2d');
+      if (aCtx) {
+        const gray = new Uint8ClampedArray(w * h * 4);
+        for (let i = 0, j = 0; i < px.length; i += 4, j += 4) {
+          const a = px[i + 3];
+          gray[j] = a;
+          gray[j + 1] = a;
+          gray[j + 2] = a;
+          gray[j + 3] = 255;
+        }
+        aCtx.putImageData(new ImageData(gray, w, h), 0, 0);
+        const aDst = new OffscreenCanvas(w2, h2);
+        const adCtx = aDst.getContext('2d');
+        if (adCtx) {
+          adCtx.imageSmoothingEnabled = true;
+          adCtx.imageSmoothingQuality = 'high';
+          adCtx.drawImage(aSrc, 0, 0, w2, h2);
+          const scaled = adCtx.getImageData(0, 0, w2, h2);
+          for (let k = 0, j = 3; k < w2 * h2; k++, j += 4) {
+            rgba[j] = scaled.data[k * 4];
+          }
+        }
+      }
+    }
+
+    const outCanvas = new OffscreenCanvas(w2, h2);
+    const outCtx = outCanvas.getContext('2d');
+    if (!outCtx) throw new Error('OffscreenCanvas unavailable');
+    outCtx.putImageData(new ImageData(rgba, w2, h2), 0, 0);
+
+    let encodeCanvas: OffscreenCanvas = outCanvas;
+    if (format === 'jpeg' && hasAlpha) {
+      // JPEG has no alpha — flatten over white instead of black.
+      const flat = new OffscreenCanvas(w2, h2);
+      const fCtx = flat.getContext('2d');
+      if (fCtx) {
+        fCtx.fillStyle = '#ffffff';
+        fCtx.fillRect(0, 0, w2, h2);
+        fCtx.drawImage(outCanvas, 0, 0);
+        encodeCanvas = flat;
+      }
+    }
+
+    const mime = `image/${format}`;
+    const blob = await encodeCanvas.convertToBlob({
+      type: mime,
+      quality: format === 'png' ? undefined : quality,
+    });
+    dbg(`job ${id.slice(0, 6)} encoded ${blob.size}B total ${Math.round(performance.now() - t0)}ms`);
+    post(
+      {
+        type: 'done',
+        id,
+        blob,
+        width: w2,
+        height: h2,
+        ms: performance.now() - t0,
+      }
+    );
+  } catch (err) {
+    const canceled = isAbortError(err) || (err instanceof Error && /^canceled$/i.test(err.message));
+    post({
+      type: 'error',
+      id,
+      message: canceled ? 'Canceled' : err instanceof Error ? err.message : 'Upscaling failed',
+    });
+  } finally {
+    aborts.delete(id);
+    if (out) out.dispose();
+  }
+}
+
+/* ---------------- serialized task queue ---------------- */
+
+let chain: Promise<void> = Promise.resolve();
+
+ctx.addEventListener('message', (e) => {
+  const msg = e.data;
+  if (!msg) return;
+  if (msg.type === 'init') {
+    // Bundlers may run this worker from a blob: URL — absolutize model paths
+    ORIGIN = msg.origin || '';
+    for (const [key, def] of Object.entries(REGISTRY)) {
+      if (key.startsWith('fast:') || key.startsWith('balanced:')) {
+        const rel = def.path?.replace(/^https?:\/\/[^/]+/, '');
+        if (rel && rel.startsWith('/')) REGISTRY[key] = { ...def, path: resolvePath(rel) };
+      }
+    }
+    return;
+  }
+  if (msg.type === 'cancel') {
+    const ac = aborts.get(msg.id);
+    if (ac) ac.abort();
+    return;
+  }
+  if (msg.type === 'upscale') {
+    chain = chain
+      .then(() => handleUpscale(msg))
+      .catch((err) => {
+        console.error('[pixelforge-worker]', err);
+      });
+  }
+});
