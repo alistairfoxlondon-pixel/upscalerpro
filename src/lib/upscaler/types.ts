@@ -35,6 +35,8 @@ export interface WorkerRequest {
   denoise: 0 | 1 | 2;
   /** unsharp-mask post-pass on the upscaled output */
   sharpen: boolean;
+  /** original JPEG APP1 EXIF segment — copied into JPEG outputs when opted in */
+  exif?: ArrayBuffer;
   /** force a specific tfjs backend (used by the stall watchdog to retry on CPU) */
   backendHint?: 'webgl' | 'cpu';
 }

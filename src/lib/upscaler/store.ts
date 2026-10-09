@@ -3,6 +3,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { decodeImageFile } from './decode';
+import { extractExifSegment } from './exif';
 import { MAX_BATCH_FILES, MAX_INPUT_PIXELS, extForFormat, resolveFormat, resolveScale } from './registry';
 import {
   idbClearResults,
@@ -60,6 +61,8 @@ export interface QueueItem {
   patch?: { cols: number; rows: number; done: number } | null;
   /** true when this item was restored from a previous session */
   restored?: boolean;
+  /** stall watchdog already gave this job one fresh-context GPU retry */
+  gpuRetry?: boolean;
 }
 
 export interface Settings {
@@ -75,6 +78,8 @@ export interface Settings {
   queueView: 'list' | 'grid';
   /** preferred compare-modal view */
   compareMode: 'slider' | 'side';
+  /** copy the original EXIF metadata into JPEG outputs (off = scrubbed clean) */
+  keepExif: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -86,6 +91,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sharpen: false,
   queueView: 'list',
   compareMode: 'slider',
+  keepExif: false,
 };
 
 export interface Totals {
@@ -131,6 +137,8 @@ let workerWired = false;
 const pending = new Map<string, { resolve: () => void }>();
 const stallTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const STALL_TIMEOUT_MS = 300_000;
+/** a fresh-context GPU retry after a Finalizing stall gets a shorter leash */
+const GPU_RETRY_TIMEOUT_MS = 180_000;
 let loopRunning = false;
 
 /* ---- patch-grid accumulation (flushed to the store at most ~8×/s) ---- */
@@ -169,12 +177,14 @@ function onPatch(id: string, row: number, col: number, cols: number, rows: numbe
 function touchStall(id: string) {
   const prev = stallTimers.get(id);
   if (prev) clearTimeout(prev);
+  const item = useStore.getState().items.find((i) => i.id === id);
+  const timeout = item?.gpuRetry ? GPU_RETRY_TIMEOUT_MS : STALL_TIMEOUT_MS;
   stallTimers.set(
     id,
     setTimeout(() => {
       stallTimers.delete(id);
       onStall(id);
-    }, STALL_TIMEOUT_MS)
+    }, timeout)
   );
 }
 
@@ -202,16 +212,46 @@ async function onStall(id: string) {
     return;
   }
   // The GPU readback is wedged — a cancel cannot unblock the worker's job
-  // chain, so terminate it and give the retry a fresh worker + CPU backend.
-  toast.info('Graphics engine stalled — restarting worker and retrying on CPU (slower but reliable)');
-  resetWorker();
-  patchItem(id, {
-    cpuRetry: true,
-    status: 'queued',
-    phase: 'Queued (CPU retry)',
-    progress: 0,
-    result: undefined,
-  });
+  // chain, so terminate it and give the retry a fresh worker.
+  if (item.gpuRetry) {
+    // Second stall — the fresh GPU context did not survive either. Fall back
+    // to the pure-JS backend: slow but deterministic.
+    toast.info('Graphics engine stalled again — retrying on CPU (slower but reliable)');
+    resetWorker();
+    patchItem(id, {
+      cpuRetry: true,
+      gpuRetry: false,
+      status: 'queued',
+      phase: 'Queued (CPU retry)',
+      progress: 0,
+      result: undefined,
+    });
+  } else if (/^Finalizing/i.test(item.phase)) {
+    // The AI pass already finished — only the GPU→CPU readback is suspect.
+    // A fresh WebGL context is usually healthy again, and re-running the AI
+    // pass is far cheaper than a full CPU inference (which can take minutes).
+    toast.info('Graphics engine stalled during output — retrying on a fresh GPU context');
+    resetWorker();
+    patchItem(id, {
+      gpuRetry: true,
+      status: 'queued',
+      phase: 'Queued (GPU retry)',
+      progress: 0,
+      result: undefined,
+    });
+  } else {
+    // Compute-phase stall — go straight to the reliable CPU fallback.
+    toast.info('Graphics engine stalled — restarting worker and retrying on CPU (slower but reliable)');
+    resetWorker();
+    patchItem(id, {
+      cpuRetry: true,
+      gpuRetry: false,
+      status: 'queued',
+      phase: 'Queued (CPU retry)',
+      progress: 0,
+      result: undefined,
+    });
+  }
   pending.get(id)?.resolve();
   pending.delete(id);
 }
@@ -413,7 +453,7 @@ async function processItem(id: string): Promise<void> {
     });
     return;
   }
-  const { preset, scale, format, jpegQuality, denoise, sharpen } = state.settings;
+  const { preset, scale, format, jpegQuality, denoise, sharpen, keepExif } = state.settings;
 
   patchItem(id, {
     status: 'processing',
@@ -458,8 +498,15 @@ async function processItem(id: string): Promise<void> {
         clamped: fit.clamped,
       },
     });
+    // Opt-in metadata preservation: pull the original JPEG APP1 EXIF segment
+    // (first 256 KB header scan — cheap) so the worker can splice it into the
+    // encoded output. Only meaningful for JPEG results.
+    const exif =
+      keepExif && resolved === 'jpeg' ? await extractExifSegment(item.file) : null;
     const done = new Promise<void>((resolve) => pending.set(id, { resolve }));
     touchStall(id);
+    const transfer: Transferable[] = [bitmap];
+    if (exif) transfer.push(exif);
     postToWorker(
       {
         type: 'upscale',
@@ -471,9 +518,10 @@ async function processItem(id: string): Promise<void> {
         quality: jpegQuality,
         denoise,
         sharpen,
+        exif: exif ?? undefined,
         backendHint: item.cpuRetry ? 'cpu' : undefined,
       },
-      [bitmap]
+      transfer
     );
     await done;
     clearStall(id);
@@ -675,6 +723,7 @@ export const useStore = create<UpscalerState>()(
       error: undefined,
       result: undefined,
       cpuRetry: false,
+      gpuRetry: false,
       patch: null,
     });
     void ensureLoop();

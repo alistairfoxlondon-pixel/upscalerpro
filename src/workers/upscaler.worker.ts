@@ -16,6 +16,7 @@ import thick2 from '@upscalerjs/esrgan-thick/2x';
 import thick3 from '@upscalerjs/esrgan-thick/3x';
 import thick4 from '@upscalerjs/esrgan-thick/4x';
 import type { ModelDefinition, PresetId, ScaleFactor, WorkerInMessage } from '@/lib/upscaler/types';
+import { jpegWithExif } from '@/lib/upscaler/exif';
 
 const PATCH_SIZE = 128;
 const PADDING = 8;
@@ -337,7 +338,7 @@ function dbg(text: string) {
 }
 
 async function handleUpscale(msg: Extract<WorkerInMessage, { type: 'upscale' }>) {
-  const { id, bitmap, scale, preset, format, quality, denoise, sharpen } = msg;
+  const { id, bitmap, scale, preset, format, quality, denoise, sharpen, exif } = msg;
   const t0 = performance.now();
   dbg(`job ${id.slice(0, 6)} start ${bitmap.width}x${bitmap.height} ${preset}:${scale}`);
   const ac = new AbortController();
@@ -445,6 +446,11 @@ async function handleUpscale(msg: Extract<WorkerInMessage, { type: 'upscale' }>)
     const h2 = out.shape[0] as number;
     const w2 = out.shape[1] as number;
     postProgress(id, 1);
+    // Give the GPU a couple of idle frames to fully drain its command queue
+    // before the first readback — issuing readPixels while patch work is still
+    // executing is what wedges software renderers.
+    await tf.nextFrame();
+    await tf.nextFrame();
     // Read the GPU tensor back in horizontal strips: one giant readPixels can
     // wedge slow/software GPUs with zero feedback (and starve the stall
     // watchdog) — strips keep messages flowing and tick a Finalizing %.
@@ -535,10 +541,15 @@ async function handleUpscale(msg: Extract<WorkerInMessage, { type: 'upscale' }>)
     }
 
     const mime = `image/${format}`;
-    const blob = await encodeCanvas.convertToBlob({
+    let blob = await encodeCanvas.convertToBlob({
       type: mime,
       quality: format === 'png' ? undefined : quality,
     });
+    if (format === 'jpeg' && exif) {
+      // Opt-in metadata preservation — splice the original APP1 EXIF segment
+      // (orientation normalized) into the freshly encoded JPEG.
+      blob = await jpegWithExif(blob, exif);
+    }
     dbg(`job ${id.slice(0, 6)} encoded ${blob.size}B total ${Math.round(performance.now() - t0)}ms`);
     post(
       {
