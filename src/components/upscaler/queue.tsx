@@ -18,6 +18,7 @@ import {
   Play,
   RefreshCw,
   RotateCcw,
+  Share2,
   Timer,
   Trash2,
   X,
@@ -34,7 +35,7 @@ import {
   resultFilename,
   useStore,
 } from '@/lib/upscaler/store';
-import { copyImageToClipboard, formatBytes, formatDuration } from '@/lib/upscaler/utils';
+import { copyImageToClipboard, formatBytes, formatDuration, shareImage } from '@/lib/upscaler/utils';
 import { openShortcuts } from './keyboard-shortcuts';
 import type { QueueItem } from '@/lib/upscaler/store';
 import { cn } from '@/lib/utils';
@@ -75,7 +76,7 @@ function ProgressRing({ progress }: { progress: number }) {
     <svg
       viewBox="0 0 60 60"
       aria-hidden
-      className="pointer-events-none absolute -inset-[3px] -rotate-90 text-primary"
+      className="pf-pulse pointer-events-none absolute -inset-[3px] -rotate-90 text-primary"
     >
       <circle cx="30" cy="30" r="28" fill="none" stroke="currentColor" strokeOpacity="0.2" strokeWidth="3" />
       <circle
@@ -123,6 +124,25 @@ function ItemActions({ item }: { item: QueueItem }) {
   const retry = useStore((s) => s.retry);
   const setCompare = useStore((s) => s.setCompare);
   const r = item.result;
+  // Web Share with files: feature-detected once per component mount
+  const [canShare] = React.useState(
+    () => typeof navigator !== 'undefined' && typeof navigator.canShare === 'function'
+  );
+
+  const onShare = () => {
+    if (!r) return;
+    void shareImage(r.url, resultFilename(item.name, r.scale, r.format, r.target), item.name).catch(
+      (err: unknown) => {
+        if ((err as DOMException | undefined)?.name === 'AbortError') return;
+        void (async () => {
+          const { toast } = await import('sonner');
+          toast.error('Could not share', {
+            description: err instanceof Error ? err.message : 'Share unavailable',
+          });
+        })();
+      }
+    );
+  };
 
   return (
     <div className="flex shrink-0 items-center gap-0.5">
@@ -186,6 +206,18 @@ function ItemActions({ item }: { item: QueueItem }) {
           >
             <Download className="h-4 w-4" aria-hidden />
           </Button>
+          {canShare && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              aria-label={`Share ${item.name}`}
+              title="Share"
+              onClick={onShare}
+            >
+              <Share2 className="h-4 w-4" aria-hidden />
+            </Button>
+          )}
         </>
       )}
       {item.status === 'done' && item.file && (
@@ -251,7 +283,7 @@ function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
     <li
       style={{ ['--i' as string]: index }}
       className={cn(
-        'pf-rise group flex items-center gap-3 rounded-lg border bg-card p-3 transition-all duration-200 hover:border-primary/40 hover:shadow-sm',
+        'pf-rise group flex items-center gap-3 rounded-lg border bg-card p-3 transition-all duration-200 hover:border-primary/40 hover:shadow-sm focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/20',
         item.status === 'processing' && 'border-primary/40 bg-primary/5',
         item.status === 'error' && 'border-red-600/30',
         excluded && 'opacity-55'
@@ -262,7 +294,7 @@ function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
 
       {/* thumbnail + progress ring */}
       <div className="relative h-14 w-14 shrink-0">
-        <div className="h-full w-full overflow-hidden rounded-md border bg-muted">
+        <div className="h-full w-full overflow-hidden rounded-md border bg-[repeating-conic-gradient(var(--border)_0%_25%,transparent_0%_50%)] bg-[length:10px_10px]">
           {item.thumbUrl ? (
             <img
               src={item.thumbUrl}
@@ -311,6 +343,11 @@ function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
               className="h-1.5 pf-stripes"
               aria-label={`${item.name} progress`}
             />
+            {item.speed && (
+              <span className="w-14 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
+                {item.speed}
+              </span>
+            )}
             <span className="w-9 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
               {Math.round(item.progress * 100)}%
             </span>
@@ -336,7 +373,7 @@ function QueueCard({ item, index }: { item: QueueItem; index: number }) {
     <li
       style={{ ['--i' as string]: Math.min(index, 11) }}
       className={cn(
-        'pf-rise group flex flex-col gap-2 rounded-lg border bg-card p-2.5 transition-all duration-200 hover:border-primary/40 hover:shadow-sm',
+        'pf-rise group flex flex-col gap-2 rounded-lg border bg-card p-2.5 transition-all duration-200 hover:border-primary/40 hover:shadow-sm focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/20',
         item.status === 'processing' && 'border-primary/40 bg-primary/5',
         item.status === 'error' && 'border-red-600/30',
         excluded && 'opacity-55'
@@ -421,6 +458,10 @@ function QueueCard({ item, index }: { item: QueueItem; index: number }) {
               className="h-1 pf-stripes"
               aria-label={`${item.name} progress`}
             />
+            <span className="shrink-0 font-mono text-[9px] tabular-nums text-muted-foreground">
+              {item.speed ? `${item.speed} · ` : ''}
+              {Math.round(item.progress * 100)}%
+            </span>
           </div>
         )}
         {item.status === 'error' && item.error && (
@@ -444,6 +485,7 @@ export function Queue() {
   const togglePause = useStore((s) => s.togglePause);
   const clearFinished = useStore((s) => s.clearFinished);
   const clearAll = useStore((s) => s.clearAll);
+  const retry = useStore((s) => s.retry);
   const totals = useStore((s) => s.totals);
   const settings = useStore((s) => s.settings);
   const setSettings = useStore((s) => s.setSettings);
@@ -451,10 +493,14 @@ export function Queue() {
 
   const doneCount = items.filter((i) => i.status === 'done').length;
   const queuedCount = items.filter((i) => i.status === 'queued').length;
+  const failedCount = items.filter((i) => (i.status === 'error' || i.status === 'canceled') && i.file).length;
   const zipCount = items.filter((i) => i.status === 'done' && i.result && i.zip !== false).length;
-  const active = items.find((i) => i.status === 'processing');
+  // with parallel processing several items advance at once: average them all
+  const processingSum = items
+    .filter((i) => i.status === 'processing')
+    .reduce((acc, i) => acc + i.progress, 0);
   const overall =
-    items.length === 0 ? 0 : (doneCount + (active ? active.progress : 0)) / items.length;
+    items.length === 0 ? 0 : (doneCount + processingSum) / items.length;
 
   const hasDone = doneCount > 0;
   const hasQueued = queuedCount > 0;
@@ -463,7 +509,7 @@ export function Queue() {
   const avgMs = totals.images > 0 ? totals.ms / totals.images : 0;
   const eta =
     busy && !paused && hasQueued && avgMs > 0
-      ? avgMs * (queuedCount + (active ? 1 - active.progress : 0))
+      ? (avgMs / 2) * (queuedCount + 1)
       : 0;
 
   return (
@@ -488,6 +534,29 @@ export function Queue() {
                 <Play className="h-3.5 w-3.5" aria-hidden />
                 Resume
               </Button>
+            )}
+            {failedCount > 0 && (
+              <TooltipProvider delayDuration={200}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 gap-1.5"
+                      onClick={() => {
+                        items
+                          .filter((i) => (i.status === 'error' || i.status === 'canceled') && i.file)
+                          .forEach((i) => retry(i.id));
+                      }}
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" aria-hidden />
+                      Retry failed
+                      <span className="font-mono text-[10px] text-muted-foreground">({failedCount})</span>
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Process all failed and canceled images again</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             )}
             <TooltipProvider delayDuration={200}>
               <Tooltip>

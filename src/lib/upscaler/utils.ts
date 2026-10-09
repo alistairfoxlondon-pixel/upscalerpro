@@ -47,6 +47,22 @@ export async function copyImageToClipboard(url: string): Promise<void> {
   await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
 }
 
+/**
+ * Shares an image (any blob URL / format) through the Web Share API as a
+ * properly named file. Throws with a readable message when unsupported.
+ */
+export async function shareImage(url: string, filename: string, title?: string): Promise<void> {
+  if (typeof navigator === 'undefined' || typeof navigator.share !== 'function') {
+    throw new Error('Sharing is not supported in this browser');
+  }
+  const blob = await (await fetch(url)).blob();
+  const file = new File([blob], filename, { type: blob.type || 'image/png' });
+  if (!navigator.canShare?.({ files: [file] })) {
+    throw new Error('Sharing files is not supported here');
+  }
+  await navigator.share({ files: [file], title: title ?? filename });
+}
+
 /** Generates a small WebP/PNG thumbnail object-URL from a bitmap. */
 export async function makeThumbUrl(bitmap: ImageBitmap, maxSide = 384): Promise<string> {
   const ratio = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));

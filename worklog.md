@@ -255,3 +255,25 @@ Stage Summary:
 - App is now a fast thin client + sharp server pipeline; sandbox POST round-trips 26-75ms for small images
 - PR #1 OPENED AND MERGED into alistairfoxlondon-pixel/upscalerpro (default branch main, commit 1f8e0bc)
 - Risks/next: Vercel Hobby 4.5MB body cap handled client-side (fitUpload) but >4.2MB transparent PNGs degrade to flattened WebP upload (alpha preserved via WebP when possible); HEIC server decode depends on sharp build (client transcodes HEIC->JPEG for thumbnails; direct HEIC upload returns clear 415 if unsupported); consider progress messaging for very large batches, and a queue concurrency>1 if server CPU allows
+
+---
+Task ID: 13
+Agent: cron-review-agent (round 10)
+Task: Status assessment + agent-browser QA, then parallel batch processing + queue UX features + styling details; PR #2 merged
+
+Work Log:
+- ASSESSMENT/QA FIRST: worklog reviewed (rounds 1-12); lint 0 / tsc 0; dev.log clean; fresh session render OK, zero console errors, light theme default + persisted settings verified. App stable -> feature work per mandate.
+- FEATURE: Parallel batch processing (CONCURRENCY = 2) in ensureLoop: chunked Promise.all over queued items; sharp handles parallel requests comfortably so batches finish ~2x faster. PROVEN IN BROWSER: injected phase sampler caught {"Uploading": 2} mid-batch, and resource-timing POST intervals overlap pairwise ([39871-39919]+[39880-39947], [40035-40096]+[40036-40206]) = two-at-a-time execution; 4/4 items Done. Overall progress bar + ETA math updated for multiple in-flight items (sum of processing progress; ETA halved per concurrency).
+- FEATURE: Live speed hint during Uploading/Downloading: rolling rate sampled >=300ms windows (formatBytes -> "1.2 MB/s"), shown next to the % in list rows and inline in grid cards, auto-cleared when the phase leaves a transfer (kept only while phase is Uploading/Downloading).
+- FEATURE: Retry failed button in the batch bar (count badge, tooltip): reruns every error/canceled item that still has a source file. E2E: corrupt.png (400 random bytes) -> item Failed -> button "Retry failed (1)" appeared -> click -> re-processed -> Failed again (expected for undecodable input), no crashes.
+- FEATURE: Web Share button on done rows/cards (Share2 icon), feature-detected via navigator.canShare; shares the result as a properly named file (resultFilename with target support); AbortError (user cancels the share sheet) silently ignored, other errors toast. Uses new shareImage() helper in utils.ts.
+- BUG FIXED (self-caught, from round 9 rewrite): a failed job kept the planned result placeholder -> bogus meta like "-> 0x0 - 400 B". processItem catch now clears result + speed; also added early-outs for !item.w || !item.h ("Could not read the image dimensions") and result: undefined in the no-file error path. VERIFIED: corrupt.png meta no longer shows phantom dims.
+- STYLING: list-row thumbs now use the checkerboard pattern (matches grid cards) so PNG transparency reads honestly; queue rows/cards gained focus-within rings (primary/20) for keyboard a11y; progress ring got a gentle pf-pulse animation (new keyframes, reduced-motion safe); grid-card checker kept; all radii still small (rounded-lg/md).
+- QA MATRIX (browser-verified): 4-file batch (incl. 1.9MB PNG) all Done; duplicate-file guard still works (re-upload of same names skipped); corrupt-file error + retry-failed; grid + list views; light + dark themes (screenshots download/round13-grid.jpg, round13-dark.jpg, round13-batch.jpg); mobile 390px scrollWidth=390 no overflow; zero console errors on fresh loads; POST /api/upscale round-trips still 26-75ms.
+- GIT: PR #2 "Parallel batch processing and queue UX improvements" (5 files: store.ts, queue.tsx, types.ts, utils.ts, globals.css) pushed as feature/parallel-batch-ux -> CREATED AND MERGED (merge commit 0b196df2). main now holds rounds 9+10.
+
+Stage Summary:
+- eslint 0 / tsc 0 / dev.log clean / zero console errors on fresh loads
+- New this round: parallel batch processing (x2), transfer speed hint, retry-failed, Web Share on results, checker list thumbs, focus rings, pulsing ring, failed-placeholder fix
+- In-memory-only server processing guarantee untouched; upload guard and output caps untouched; PR #1 + #2 both merged into alistairfoxlondon-pixel/upscalerpro main
+- Risks/next: concurrency fixed at 2 (could become a setting or adaptive); speed hint rarely visible on fast local transfers (real networks will show it); Vercel lambda concurrency = per-instance CPU (2 parallel sharp jobs fit Hobby memory fine for capped outputs); consider pause semantics nuance (pause now waits for up to 2 in-flight items, wording already matches); possible next: adaptive concurrency, drag-to-reorder queue, per-item concurrency for HEIC transcode path
