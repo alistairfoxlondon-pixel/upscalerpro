@@ -61,4 +61,6 @@ export interface QueueItem {
   restored?: boolean;
   /** true when the input was re-encoded before upload to fit the size cap */
   optimized?: boolean;
+  /** transient upload / download rate hint (e.g. "1.2 MB/s") */
+  speed?: string;
 }

@@ -240,6 +240,20 @@
   animation: pf-wiggle 0.5s ease-in-out infinite;
 }
 
+/* gentle pulse for the live progress ring */
+@keyframes pf-pulse {
+  0%,
+  100% {
+    opacity: 0.8;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.pf-pulse {
+  animation: pf-pulse 1.4s ease-in-out infinite;
+}
+
 /* pop-in for completion badges */
 @keyframes pf-pop {
   0% {
