@@ -108,7 +108,7 @@ function processViaServer(
   id: string,
   upload: Blob,
   params: Record<string, string>,
-  onProgress: (progress: number, phase: string) => void
+  onProgress: (progress: number, phase: string, speed?: string) => void
 ): Promise<ServerResult> {
   return new Promise<ServerResult>((resolve, reject) => {
     const form = new FormData();
@@ -128,9 +128,30 @@ function processViaServer(
       }
     };
 
+    // rolling transfer-rate hint, sampled at most ~3x per second
+    let lastT = 0;
+    let lastLoaded = 0;
+    let lastSpeed = '';
+    const rate = (loaded: number): string => {
+      const now = performance.now();
+      if (!lastT) {
+        lastT = now;
+        lastLoaded = loaded;
+        return lastSpeed;
+      }
+      const dt = now - lastT;
+      if (dt >= 300) {
+        const bps = ((loaded - lastLoaded) * 1000) / dt;
+        lastT = now;
+        lastLoaded = loaded;
+        if (bps > 0) lastSpeed = `${formatBytes(bps)}/s`;
+      }
+      return lastSpeed;
+    };
+
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) {
-        onProgress(0.02 + 0.26 * (e.loaded / Math.max(1, e.total)), 'Uploading');
+        onProgress(0.02 + 0.26 * (e.loaded / Math.max(1, e.total)), 'Uploading', rate(e.loaded));
       }
     };
     xhr.upload.onload = () => {
@@ -145,7 +166,7 @@ function processViaServer(
     xhr.onprogress = (e) => {
       stopCreep();
       if (e.lengthComputable && e.total > 0) {
-        onProgress(0.74 + 0.24 * (e.loaded / e.total), 'Downloading');
+        onProgress(0.74 + 0.24 * (e.loaded / e.total), 'Downloading', rate(e.loaded));
       }
     };
     xhr.onload = () => {
@@ -231,6 +252,16 @@ async function processItem(id: string): Promise<void> {
       status: 'error',
       phase: 'Failed',
       error: 'Original file is not kept after a reload. Add the image again.',
+      result: undefined,
+    });
+    return;
+  }
+  if (!item.w || !item.h) {
+    patchItem(id, {
+      status: 'error',
+      phase: 'Failed',
+      error: 'Could not read the image dimensions',
+      result: undefined,
     });
     return;
   }
@@ -244,6 +275,7 @@ async function processItem(id: string): Promise<void> {
       status: 'error',
       phase: 'Failed',
       error: fit?.error ?? 'Image is too large to upscale',
+      result: undefined,
     });
     return;
   }
@@ -294,7 +326,13 @@ async function processItem(id: string): Promise<void> {
         quality: String(settings.jpegQuality),
         exif: settings.keepExif && resolved === 'jpeg' ? '1' : '0',
       },
-      (progress, phase) => patchItem(id, { progress, phase })
+      (progress, phase, speed) =>
+        patchItem(id, {
+          progress,
+          phase,
+          // keep the hint only while a transfer is actually running
+          speed: phase === 'Uploading' || phase === 'Downloading' ? speed : undefined,
+        })
     );
 
     const url = URL.createObjectURL(res.blob);
@@ -333,6 +371,8 @@ async function processItem(id: string): Promise<void> {
       phase: canceled ? 'Canceled' : 'Failed',
       error: canceled ? undefined : msg,
       progress: 0,
+      speed: undefined,
+      result: undefined, // drop the planned placeholder so the meta line stays honest
     });
     if (!canceled) {
       console.error('[pixelforge]', msg);
@@ -406,6 +446,8 @@ async function makePreviewUrlFromUrl(url: string, maxSide = 2048): Promise<Blob>
   }
 }
 
+const CONCURRENCY = 2;
+
 async function ensureLoop() {
   if (loopRunning) return;
   loopRunning = true;
@@ -415,11 +457,18 @@ async function ensureLoop() {
     for (;;) {
       const s = useStore.getState();
       if (s.paused) break;
-      const next = s.items.find((i) => i.status === 'queued');
-      if (!next) break;
-      await processItem(next.id);
-      const after = useStore.getState().items.find((i) => i.id === next.id);
-      if (after?.status === 'done') completed++;
+      // process up to CONCURRENCY items at once: sharp handles parallel
+      // requests comfortably, so batches finish noticeably faster
+      const batch = s.items.filter((i) => i.status === 'queued').slice(0, CONCURRENCY);
+      if (!batch.length) break;
+      useStore.setState({ activeId: batch[0].id });
+      await Promise.all(
+        batch.map(async (item) => {
+          await processItem(item.id);
+          const after = useStore.getState().items.find((i) => i.id === item.id);
+          if (after?.status === 'done') completed++;
+        })
+      );
     }
   } finally {
     loopRunning = false;
