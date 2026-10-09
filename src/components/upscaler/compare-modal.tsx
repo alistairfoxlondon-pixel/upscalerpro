@@ -65,7 +65,7 @@ export function CompareModal() {
                 className="max-h-[56vh]"
               />
               <p className="mt-2 text-center text-[11px] text-muted-foreground">
-                Drag the handle to compare · or open full size to zoom to 100%
+                Drag the handle to compare · scroll to zoom · drag to pan when zoomed · or open full size for 1:1 pixels
               </p>
             </div>
 

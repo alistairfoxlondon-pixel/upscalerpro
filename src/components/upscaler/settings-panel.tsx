@@ -94,13 +94,27 @@ export function SettingsPanel() {
               <ToggleGroupItem
                 key={s}
                 value={String(s)}
-                aria-label={`${s} times upscale`}
-                className="flex-1 rounded-lg border font-mono text-sm data-[state=on]:border-primary data-[state=on]:bg-primary/10"
+                aria-label={`${s} times upscale${s === 8 ? ' (small images only)' : ''}`}
+                title={s === 8 ? '8× chains two AI passes — needs a small source image' : undefined}
+                className="relative flex-1 rounded-lg border font-mono text-sm data-[state=on]:border-primary data-[state=on]:bg-primary/10"
               >
                 {s}×
+                {s === 8 && (
+                  <span
+                    className="absolute -top-1.5 right-1 rounded-full bg-primary px-1 py-px font-sans text-[8px] font-bold uppercase tracking-wide text-primary-foreground"
+                    aria-hidden
+                  >
+                    max
+                  </span>
+                )}
               </ToggleGroupItem>
             ))}
           </ToggleGroup>
+          {settings.scale === 8 && (
+            <p className="text-[11px] leading-snug text-muted-foreground">
+              8× chains two AI passes (4× → 2×) for 64× more pixels — best for small images; larger ones auto-drop to 4×.
+            </p>
+          )}
         </div>
 
         {/* Output format */}

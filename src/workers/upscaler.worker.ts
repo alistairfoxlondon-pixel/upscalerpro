@@ -240,7 +240,13 @@ function unsharpMask(rgba: Uint8ClampedArray, w: number, h: number, amount = 0.6
   }
 }
 
-async function upscaleRgbTensor(upscaler: UpscalerInstance, input: tf.Tensor4D, id: string, signal: AbortSignal): Promise<tf.Tensor3D> {
+async function upscaleRgbTensor(
+  upscaler: UpscalerInstance,
+  input: tf.Tensor4D,
+  id: string,
+  signal: AbortSignal,
+  mapRate?: (rate: number) => number
+): Promise<tf.Tensor3D> {
   return (await upscaler.execute(input, {
     output: 'tensor' as const,
     progressOutput: 'tensor' as const,
@@ -256,7 +262,7 @@ async function upscaleRgbTensor(upscaler: UpscalerInstance, input: tf.Tensor4D, 
       if (slice && typeof (slice as tf.Tensor).dispose === 'function') {
         (slice as tf.Tensor).dispose();
       }
-      postProgress(id, amount);
+      postProgress(id, mapRate ? mapRate(amount) : amount);
     },
   })) as tf.Tensor3D;
 }
@@ -276,12 +282,6 @@ async function handleUpscale(msg: Extract<WorkerInMessage, { type: 'upscale' }>)
   try {
     await initBackend(msg.backendHint);
     const backend = tf.getBackend();
-    const upscaler = await getModel(backend, preset, scale);
-    if (aborts.get(id) !== ac) throw new Error('Canceled');
-    dbg(`job ${id.slice(0, 6)} model ready ${Math.round(performance.now() - t0)}ms`);
-    // always announce readiness so the UI can leave the "Loading model" phase
-    // even when the model was cached
-    post({ type: 'model-status', preset, scale, status: 'ready' });
 
     const w = bitmap.width;
     const h = bitmap.height;
@@ -324,21 +324,77 @@ async function handleUpscale(msg: Extract<WorkerInMessage, { type: 'upscale' }>)
       rgb[j + 1] = px[i + 1];
       rgb[j + 2] = px[i + 2];
     }
-    const input = tf.tensor4d(rgb, [1, h, w, 3]);
+    // 8× runs as a chained 4×→2× pass (reuses self-hosted weights — no extra
+    // downloads, and quality stays on the same ESRGAN architecture). Every
+    // intermediate tensor is tracked and disposed in the finally block.
+    const passes: ScaleFactor[] = scale === 8 ? [4, 2] : [scale];
+    const tracked: Array<{ dispose(): void }> = [];
+    let input: tf.Tensor4D = tf.tensor4d(rgb, [1, h, w, 3]);
+    tracked.push(input);
     try {
-      const tExec = performance.now();
-      out = await upscaleRgbTensor(upscaler, input, id, ac.signal);
-      console.log(`[worker] execute done in ${Math.round(performance.now() - tExec)}ms (${w}x${h} -> ${out.shape[1]}x${out.shape[0]})`);
-      dbg(`job ${id.slice(0, 6)} execute done ${Math.round(performance.now() - tExec)}ms`);
+      for (let p = 0; p < passes.length; p++) {
+        const passScale = passes[p];
+        const isLast = p === passes.length - 1;
+        const passUpscaler = await getModel(backend, preset, passScale);
+        if (aborts.get(id) !== ac) throw new Error('Canceled');
+        if (p === 0) {
+          // always announce readiness so the UI can leave the "Loading model"
+          // phase even when the model was cached
+          post({ type: 'model-status', preset, scale, status: 'ready' });
+        }
+        const tPass = performance.now();
+        const res = await upscaleRgbTensor(
+          passUpscaler,
+          input,
+          id,
+          ac.signal,
+          // pass 1 (4×) ≈ 22% of the work, pass 2 (2×) ≈ 78% (pixel counts)
+          passes.length === 1 ? undefined : p === 0 ? (r) => r * 0.22 : (r) => 0.22 + r * 0.77
+        );
+        dbg(
+          `job ${id.slice(0, 6)} pass ${passScale}x done ${Math.round(performance.now() - tPass)}ms` +
+            ` -> ${res.shape[1]}x${res.shape[0]}`
+        );
+        if (!isLast) {
+          tracked.push(res);
+          const prev = input;
+          input = tf.reshape(res, [
+            1,
+            res.shape[0] as number,
+            res.shape[1] as number,
+            3,
+          ]) as tf.Tensor4D;
+          tracked.push(input);
+          prev.dispose(); // shares memory with the reshaped view (refcounted)
+        } else {
+          out = res; // final output — disposed below after data readback
+        }
+      }
     } finally {
-      input.dispose();
+      for (const t of tracked) t.dispose();
     }
     if (aborts.get(id) !== ac) throw new Error('Canceled');
+    if (!out) throw new Error('Upscaling produced no output');
 
     const h2 = out.shape[0] as number;
     const w2 = out.shape[1] as number;
     postProgress(id, 1);
-    const rgbOut = await out.data();
+    // Read the GPU tensor back in horizontal strips: one giant readPixels can
+    // wedge slow/software GPUs with zero feedback (and starve the stall
+    // watchdog) — strips keep messages flowing and tick a Finalizing %.
+    const strips = Math.min(8, Math.max(1, Math.floor(h2 / 256)));
+    const rgbOut = new Float32Array(w2 * h2 * 3);
+    for (let s = 0; s < strips; s++) {
+      const y0 = Math.floor((h2 * s) / strips);
+      const y1 = Math.floor((h2 * (s + 1)) / strips);
+      const slice = out.slice([y0, 0, 0], [y1 - y0, w2, 3]);
+      const data = await slice.data();
+      rgbOut.set(data as Float32Array, y0 * w2 * 3);
+      slice.dispose();
+      if (strips > 1) {
+        postPhase(id, `Finalizing ${Math.round(((s + 1) / strips) * 100)}%`);
+      }
+    }
     out.dispose();
     out = null;
     dbg(`job ${id.slice(0, 6)}` + ` data read ${Math.round(performance.now() - t0)}ms`);

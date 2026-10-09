@@ -47,7 +47,7 @@ const statusIcon: Record<QueueItem['status'], React.ReactNode> = {
   canceled: <Ban className="h-3 w-3" aria-hidden />,
 };
 
-function QueueItemRow({ item }: { item: QueueItem }) {
+function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
   const removeItem = useStore((s) => s.removeItem);
   const retry = useStore((s) => s.retry);
   const setCompare = useStore((s) => s.setCompare);
@@ -62,8 +62,9 @@ function QueueItemRow({ item }: { item: QueueItem }) {
 
   return (
     <li
+      style={{ ['--i' as string]: index }}
       className={cn(
-        'group flex items-center gap-3 rounded-xl border bg-card/60 p-3 transition-all duration-200 hover:border-primary/40 hover:bg-card hover:shadow-md',
+        'pf-rise group flex items-center gap-3 rounded-xl border bg-card/60 p-3 transition-all duration-200 hover:-translate-y-px hover:border-primary/40 hover:bg-card hover:shadow-md',
         item.status === 'processing' && 'border-primary/40 bg-primary/5 shadow-[0_0_24px_-12px] shadow-primary/50',
         item.status === 'error' && 'border-red-500/30'
       )}
@@ -124,7 +125,8 @@ function QueueItemRow({ item }: { item: QueueItem }) {
           <span
             className={cn(
               'inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium',
-              statusStyle[item.status]
+              statusStyle[item.status],
+              item.status === 'done' && 'pf-pop'
             )}
           >
             {statusIcon[item.status]}
@@ -133,7 +135,7 @@ function QueueItemRow({ item }: { item: QueueItem }) {
         </div>
 
         <p className="mt-0.5 truncate text-[11px] text-muted-foreground tabular-nums">
-          {meta.length ? meta.join(' · ') : item.error ? item.mime : item.mime}
+          {meta.length ? meta.join(' · ') : item.mime}
         </p>
 
         {item.status === 'processing' && (
@@ -155,7 +157,7 @@ function QueueItemRow({ item }: { item: QueueItem }) {
 
       {/* actions */}
       <div className="flex shrink-0 items-center gap-0.5">
-        {r && (
+        {r && item.status === 'done' && (
           <>
             <Button
               variant="ghost"
@@ -241,12 +243,13 @@ export function Queue() {
       <div className="rounded-xl border bg-card/60 p-3">
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-2">
-            {busy && !paused ? (
+            {busy && !paused && (
               <Button size="sm" variant="outline" className="h-8 gap-1.5" onClick={togglePause} disabled={!hasQueued}>
                 <Pause className="h-3.5 w-3.5" aria-hidden />
                 Pause
               </Button>
-            ) : (
+            )}
+            {paused && (
               <Button
                 size="sm"
                 variant="outline"
@@ -307,8 +310,8 @@ export function Queue() {
 
       {/* items */}
       <ul className="max-h-[52vh] space-y-2 overflow-y-auto pr-1 fancy-scroll" role="list">
-        {items.map((item) => (
-          <QueueItemRow key={item.id} item={item} />
+        {items.map((item, i) => (
+          <QueueItemRow key={item.id} item={item} index={i} />
         ))}
       </ul>
     </div>

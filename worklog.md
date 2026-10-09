@@ -87,3 +87,27 @@ Stage Summary:
 - New capabilities this round: noise cleanup, detail sharpening, remembered settings, installable/offline-capable PWA shell, richer processing UI
 - Recovery stack now: awaitNextFrame (queue-depth fix) → phase messages → 300s stall watchdog → worker restart + CPU retry → clear error with guidance
 - Risks/next: CPU fallback is very slow on huge images (documented in error copy); Studio (29MB) first-load UX could use a download progress bar (tfjs loadLayersModel has no progress hook without patching); compare-modal zoom/pan still open as a future nicety; consider IndexedDB model caching if SW cache eviction becomes an issue.
+
+---
+Task ID: 6
+Agent: cron-review-agent (round 3)
+Task: QA assessment, 8× upscale feature, compare zoom & pan, styling detail pass
+
+Work Log:
+- QA first: page render ✓, 4× sample flow ✓ (18.6s SwiftShader), compare modal ✓, settings persistence ✓ (Fast/Strong-denoise/Sharpen survived reload), console clean. App was stable → proceeded to feature work per mandate.
+- BUG #4 FIXED (pre-existing): queue Compare/Download buttons rendered during processing from the placeholder result object — clicking Compare opened nothing, Download would fetch('') . Buttons now gated on `item.status === 'done'`.
+- BUG #5 FIXED (pre-existing): idle Pause/Resume button showed a disabled "Resume" when nothing was paused. Pause shows only when busy&&!paused; Resume only when paused.
+- BUG #6 FIXED (new-code bug caught immediately): leftover pre-loop getModel(preset, scale) threw 'Unknown model configuration fast:8' — removed; per-pass getModel in the chain loop is the only loader now.
+- FEATURE: 8× upscale via chained 4×→2× passes in the worker (no new weights; reuses self-hosted slim/medium + CDN thick). ScaleFactor 2|3|4|8; resolveScale tries [requested,4,3,2] against 8192px/34MP caps (8× needs input ≲0.5MP, auto-drops to 4× otherwise). Per-pass progress mapping (pass1≈22%, pass2≈77%); all chain tensors tracked + disposed in finally; final output excluded from tracked (disposed after data readback). Verified in browser: pass 4x →384×288, pass 2x →768×576 (96×72 sample, Fast).
+- FEATURE: strip-wise final readback — out.data() split into ≤8 horizontal slices with 'Finalizing N%' phase ticks: keeps the stall watchdog fed during big GPU readbacks (previously a silent 95% freeze for the whole readback; could false-trigger the 300s watchdog on slow GPUs).
+- FEATURE: Compare modal zoom & pan — wheel zoom toward cursor (1–6×, non-passive listener), drag-to-pan when zoomed (cursor grab/grabbing, touch-action gated), divider grab pad lives INSIDE the transformed stage (counter-scaled width 24/zoom px) so it stays glued to the reveal edge while panning; floating controls (−/percent/Fit-or-2×/+), keyboard +/−/0/f, Home/End/Arrows unchanged; state resets per image pair. Verified: 196% zoom render, pan matrix(1.96,0,0,1.96,-140,20), reset → identity. (First pan attempt "failed" only because the pointer started exactly on the divider pad — it performed a legit divider drag; off-pad drag pans.)
+- STYLING: hero gets two slow-drifting ambient orbs + shimmer sweep on the gradient headline + chip hover polish; dropzone shine-sweep on hover (mutually exclusive with pf-drag ring — overflow:hidden would clip the conic ring) + icon wiggle while dragging; queue rows staggered pf-rise entrance (--i based, capped 12) + hover lift + pf-pop on Done badge; Features/FAQ headers get eyebrow pill with gradient rule lines; features headline rewritten ('Cloud-quality upscaling, without the cloud').
+- MOTION: global prefers-reduced-motion guard kills all pf-* animations (stripes, drag ring, orbs, shimmer, rise, pop, wiggle, breathe).
+- COPY: hero 'up to 8× sharper'; FAQ size-limit answer covers 8× (~0.5MP source guidance); settings 8× button has MAX badge + title tooltip + hint line '8× chains two AI passes (4× → 2×)…'.
+- CLEANUP: redundant ternary in queue meta line.
+
+Stage Summary:
+- eslint 0 problems · tsc 0 errors · dev.log clean · fresh-page console clean
+- Browser-verified: 8× chain (96×72→768×576), 4× regression, zoom/pan/reset in compare modal, light+dark themes, idle batch-bar buttons, session stats
+- SwiftShader note: 8× output readback is slow in headless/software-GL (~2–3 min for 442k px) but now ticks 'Finalizing N%' and feeds the watchdog; real GPUs are ms-fast
+- Risks/next: pin two-finger pinch-zoom in compare (buttons only today); 8× on Studio = two 29MB models in VRAM (works, but consider a warning when preset=studio+scale=8); Optional: remember compare-zoom preference

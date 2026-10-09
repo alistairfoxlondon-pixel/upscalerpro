@@ -65,7 +65,7 @@ export function Dropzone() {
         hasItems ? 'gap-2 px-6 py-8' : 'gap-3 px-6 py-14 sm:py-20',
         dragging
           ? 'pf-drag bg-primary/10 shadow-[0_0_40px_-12px] shadow-primary/40'
-          : 'border-border/80 hover:border-primary/60 hover:bg-primary/5'
+          : 'pf-shine border-border/80 hover:border-primary/60 hover:bg-primary/5'
       )}
     >
       <input
@@ -88,7 +88,7 @@ export function Dropzone() {
         )}
       >
         {dragging ? (
-          <ImagePlus className="h-6 w-6" aria-hidden />
+          <ImagePlus className="pf-wiggle h-6 w-6" aria-hidden />
         ) : (
           <CloudUpload className={cn(hasItems ? 'h-5 w-5' : 'h-7 w-7')} aria-hidden />
         )}

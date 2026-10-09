@@ -22,7 +22,7 @@ const faqs = [
   },
   {
     q: 'Is there a size limit?',
-    a: 'Outputs are capped at 8192 px per side (~34 MP) to keep your device stable. If 4× would exceed that, PixelForge automatically applies the largest safe scale and tells you. Very large inputs (>40 MP) are rejected with a clear message.',
+    a: 'Outputs are capped at 8192 px per side (~34 MP) to keep your device stable. If the chosen scale would exceed that, PixelForge automatically applies the largest safe scale and tells you — this also applies to 8×, which needs a small source image (roughly under 0.5 MP). Very large inputs (>40 MP) are rejected with a clear message.',
   },
   {
     q: 'How good is the quality compared to online tools?',
@@ -37,7 +37,14 @@ const faqs = [
 export function Faq() {
   return (
     <section className="mx-auto w-full max-w-3xl px-4 pb-16" aria-labelledby="faq-title">
-      <div className="mb-6 text-center">
+      <div className="mb-8 text-center">
+        <div className="mb-3 flex items-center justify-center gap-3" aria-hidden>
+          <span className="h-px w-10 bg-gradient-to-r from-transparent to-border" />
+          <span className="rounded-full border border-border/60 bg-card/60 px-2.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+            FAQ
+          </span>
+          <span className="h-px w-10 bg-gradient-to-l from-transparent to-border" />
+        </div>
         <h2 id="faq-title" className="text-2xl font-bold tracking-tight sm:text-3xl">
           Frequently asked
         </h2>

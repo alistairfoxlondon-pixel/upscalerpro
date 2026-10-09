@@ -32,7 +32,7 @@ export const PRESETS: Record<PresetId, PresetMeta> = {
 
 export const PRESET_ORDER: PresetId[] = ['fast', 'balanced', 'studio'];
 
-export const SCALES: ScaleFactor[] = [2, 3, 4];
+export const SCALES: ScaleFactor[] = [2, 3, 4, 8];
 
 /** Safety caps so a huge image can't blow up device memory. */
 export const MAX_OUT_DIM = 8192;
@@ -42,6 +42,8 @@ export const MAX_BATCH_FILES = 50;
 
 /**
  * Pick the largest scale that is <= requested and within memory caps.
+ * 8× runs as a chained 4×→2× pass in the worker; the memory math is the same
+ * as a plain 8× (64× more pixels), so the caps below guard both cases.
  * Returns null when not even 2x is possible.
  */
 export function resolveScale(
@@ -49,7 +51,7 @@ export function resolveScale(
   h: number,
   requested: ScaleFactor
 ): { scale: ScaleFactor; clamped: boolean } | null {
-  for (const s of [requested, 3, 2] as ScaleFactor[]) {
+  for (const s of [requested, 4, 3, 2] as ScaleFactor[]) {
     if (s > requested) continue;
     const ow = w * s;
     const oh = h * s;

@@ -9,7 +9,7 @@ export interface ModelDefinition {
 }
 
 export type PresetId = 'fast' | 'balanced' | 'studio';
-export type ScaleFactor = 2 | 3 | 4;
+export type ScaleFactor = 2 | 3 | 4 | 8;
 export type OutputFormat = 'jpeg' | 'png' | 'webp';
 export type FormatChoice = OutputFormat | 'auto';
 
