@@ -32,6 +32,14 @@ const faqs = [
     q: 'Does it remember my settings?',
     a: 'Yes — your engine, scale, format and enhance choices are stored locally in your browser (localStorage). Nothing about you or your images ever syncs anywhere.',
   },
+  {
+    q: 'What happens to my results if I reload the page?',
+    a: 'Finished upscales are kept in your browser (IndexedDB) and reappear on your next visit — up to the last 12 results or ~96 MB, whichever fills first. Everything stays on this device; “Clear all” wipes it immediately. The original source files are not kept, so re-upscaling a restored item needs a fresh drop.',
+  },
+  {
+    q: 'Can I export several results at once?',
+    a: 'Yes — “ZIP all” packs every included result into a single archive with clean filenames (photo_4x_upscaled.png style). Tick the small ZIP checkbox on any finished item to exclude it from the pack.',
+  },
 ];
 
 export function Faq() {

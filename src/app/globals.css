@@ -339,6 +339,21 @@
   animation: pf-pop 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+/* live AI patch-mosaic cells (processing thumbnails) */
+@keyframes pf-patch {
+  from {
+    transform: scale(0.55);
+    opacity: 0.15;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+.pf-patch-cell {
+  animation: pf-patch 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 /* respect reduced-motion everywhere */
 @media (prefers-reduced-motion: reduce) {
   .pf-rise,
@@ -347,6 +362,7 @@
   .pf-wiggle,
   .pf-pop,
   .pf-breathe,
+  .pf-patch-cell,
   .pf-stripes [data-slot='progress-indicator'],
   .pf-drag::before {
     animation: none !important;

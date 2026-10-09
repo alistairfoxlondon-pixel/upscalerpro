@@ -4,6 +4,7 @@ import * as React from 'react';
 import {
   Download,
   Eye,
+  History,
   LayoutGrid,
   LayoutList,
   Loader2,
@@ -25,6 +26,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { PRESETS } from '@/lib/upscaler/registry';
 import {
@@ -89,6 +91,68 @@ function ProgressRing({ progress }: { progress: number }) {
         className="transition-[stroke-dashoffset] duration-200"
       />
     </svg>
+  );
+}
+
+/**
+ * Live AI patch mosaic — every cell is one 128px patch the neural engine has
+ * finished. Giant grids (>220 patches) fall back to a sampled 16×12 mosaic so
+ * DOM size stays bounded while the look stays accurate.
+ */
+function PatchGrid({ patch }: { patch: NonNullable<QueueItem['patch']> }) {
+  const total = patch.cols * patch.rows;
+  if (total <= 1) return null;
+  const sampled = total > 220 ? { cols: 16, rows: 12 } : { cols: patch.cols, rows: patch.rows };
+  const shownTotal = sampled.cols * sampled.rows;
+  const doneShown = Math.min(shownTotal, Math.round((patch.done / total) * shownTotal));
+  const cells: React.ReactNode[] = [];
+  for (let i = 0; i < shownTotal; i++) {
+    const isDone = i < doneShown;
+    cells.push(
+      <span
+        key={i}
+        aria-hidden
+        className={cn(
+          'rounded-[1px]',
+          isDone ? 'pf-patch-cell bg-primary/80 shadow-[0_0_4px] shadow-primary/40' : 'bg-foreground/10'
+        )}
+      />
+    );
+  }
+  return (
+    <div
+      className="pointer-events-none absolute inset-1.5 grid gap-[2px] p-0"
+      style={{
+        gridTemplateColumns: `repeat(${sampled.cols}, minmax(0,1fr))`,
+        gridTemplateRows: `repeat(${sampled.rows}, minmax(0,1fr))`,
+      }}
+    >
+      {cells}
+    </div>
+  );
+}
+
+function ZipToggle({ item, className }: { item: QueueItem; className?: string }) {
+  const toggleZip = useStore((s) => s.toggleZip);
+  const included = item.zip !== false;
+  return (
+    <label
+      className={cn(
+        'inline-flex cursor-pointer items-center gap-1.5 rounded-md bg-background/80 px-1.5 py-1 backdrop-blur-sm',
+        className
+      )}
+      title={included ? 'Included in ZIP export' : 'Excluded from ZIP export'}
+    >
+      <Checkbox
+        checked={included}
+        onCheckedChange={() => toggleZip(item.id)}
+        aria-label={`Include ${item.name} in ZIP export`}
+        className="h-3.5 w-3.5"
+      />
+      <span className="font-mono text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+        zip
+      </span>
+    </label>
   );
 }
 
@@ -162,7 +226,7 @@ function ItemActions({ item }: { item: QueueItem }) {
           </Button>
         </>
       )}
-      {item.status === 'done' && (
+      {item.status === 'done' && item.file && (
         <TooltipProvider delayDuration={200}>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -180,7 +244,7 @@ function ItemActions({ item }: { item: QueueItem }) {
           </Tooltip>
         </TooltipProvider>
       )}
-      {(item.status === 'error' || item.status === 'canceled') && (
+      {(item.status === 'error' || item.status === 'canceled') && item.file && (
         <Button
           variant="ghost"
           size="icon"
@@ -219,6 +283,7 @@ function buildMeta(item: QueueItem): string {
 
 function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
   const r = item.result;
+  const excluded = item.status === 'done' && item.zip === false;
 
   return (
     <li
@@ -226,10 +291,14 @@ function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
       className={cn(
         'pf-rise group flex items-center gap-3 rounded-xl border bg-card/60 p-3 transition-all duration-200 hover:-translate-y-px hover:border-primary/40 hover:bg-card hover:shadow-md',
         item.status === 'processing' && 'border-primary/40 bg-primary/5 shadow-[0_0_24px_-12px] shadow-primary/50',
-        item.status === 'error' && 'border-red-500/30'
+        item.status === 'error' && 'border-red-500/30',
+        excluded && 'opacity-55'
       )}
     >
-      {/* thumbnail + progress ring */}
+      {/* ZIP selection for finished items */}
+      {item.status === 'done' && <ZipToggle item={item} />}
+
+      {/* thumbnail + progress ring + patch mosaic */}
       <div className="relative h-14 w-14 shrink-0">
         <div className="h-full w-full overflow-hidden rounded-lg border bg-muted/40">
         {item.thumbUrl ? (
@@ -246,6 +315,7 @@ function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
             <X className="h-4 w-4" aria-hidden />
           </div>
         )}
+          {item.status === 'processing' && item.patch && <PatchGrid patch={item.patch} />}
           {r && (
             <span className="absolute bottom-0 right-0 flex">
               <span className="bg-black/60 px-1 py-px font-mono text-[9px] font-semibold text-white">
@@ -266,6 +336,20 @@ function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
           <p className="truncate text-sm font-medium" title={item.name}>
             {item.name}
           </p>
+          {item.restored && (
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="shrink-0 text-muted-foreground/70" aria-label="Restored from your last session">
+                    <History className="h-3.5 w-3.5" aria-hidden />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-56">
+                  Restored from your last session — the original file isn&apos;t kept, so re-upscaling needs a fresh drop.
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
           <StatusChip item={item} />
         </div>
 
@@ -297,6 +381,7 @@ function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
 
 function QueueCard({ item, index }: { item: QueueItem; index: number }) {
   const r = item.result;
+  const excluded = item.status === 'done' && item.zip === false;
 
   return (
     <li
@@ -304,7 +389,8 @@ function QueueCard({ item, index }: { item: QueueItem; index: number }) {
       className={cn(
         'pf-rise group flex flex-col gap-2 rounded-xl border bg-card/60 p-2.5 transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/40 hover:bg-card hover:shadow-md',
         item.status === 'processing' && 'border-primary/40 bg-primary/5 shadow-[0_0_24px_-12px] shadow-primary/50',
-        item.status === 'error' && 'border-red-500/30'
+        item.status === 'error' && 'border-red-500/30',
+        excluded && 'opacity-55'
       )}
     >
       {/* thumbnail stage */}
@@ -324,6 +410,8 @@ function QueueCard({ item, index }: { item: QueueItem; index: number }) {
           </div>
         )}
 
+        {item.status === 'processing' && item.patch && <PatchGrid patch={item.patch} />}
+
         {/* badges */}
         {r && (
           <span className="absolute left-1.5 top-1.5 flex items-center gap-1">
@@ -342,6 +430,9 @@ function QueueCard({ item, index }: { item: QueueItem; index: number }) {
             <StatusChip item={item} />
           </span>
         )}
+
+        {/* ZIP selection for finished items */}
+        {item.status === 'done' && <ZipToggle item={item} className="absolute right-1.5 top-1.5" />}
 
         {/* centered progress ring while processing */}
         {item.status === 'processing' && (
@@ -370,8 +461,9 @@ function QueueCard({ item, index }: { item: QueueItem; index: number }) {
 
       {/* info */}
       <div className="min-w-0 space-y-0.5 px-0.5">
-        <p className="truncate text-xs font-medium" title={item.name}>
-          {item.name}
+        <p className="flex items-center gap-1 truncate text-xs font-medium" title={item.name}>
+          {item.restored && <History className="h-3 w-3 shrink-0 text-muted-foreground/70" aria-hidden />}
+          <span className="truncate">{item.name}</span>
         </p>
         <p className="truncate text-[10px] text-muted-foreground tabular-nums">
           {buildMeta(item) || item.mime}
@@ -415,6 +507,7 @@ export function Queue() {
 
   const doneCount = items.filter((i) => i.status === 'done').length;
   const queuedCount = items.filter((i) => i.status === 'queued').length;
+  const zipCount = items.filter((i) => i.status === 'done' && i.result && i.zip !== false).length;
   const active = items.find((i) => i.status === 'processing');
   const overall =
     items.length === 0
@@ -457,17 +550,29 @@ export function Queue() {
                 Resume
               </Button>
             )}
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-8 gap-1.5"
-              onClick={() => void downloadAllAsZip()}
-              disabled={!hasDone}
-            >
-              <FileArchive className="h-3.5 w-3.5" aria-hidden />
-              ZIP all
-              {hasDone && <span className="font-mono text-[10px] text-muted-foreground">({doneCount})</span>}
-            </Button>
+            <TooltipProvider delayDuration={200}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 gap-1.5"
+                    onClick={() => void downloadAllAsZip()}
+                    disabled={zipCount === 0}
+                  >
+                    <FileArchive className="h-3.5 w-3.5" aria-hidden />
+                    ZIP all
+                    <span className="font-mono text-[10px] text-muted-foreground">
+                      ({zipCount}
+                      {hasDone && zipCount !== doneCount ? `/${doneCount}` : ''})
+                    </span>
+                  </Button>
+                </TooltipTrigger>
+                {hasDone && zipCount !== doneCount && (
+                  <TooltipContent>Deselect items with the ZIP checkboxes to skip them</TooltipContent>
+                )}
+              </Tooltip>
+            </TooltipProvider>
             <Button size="sm" variant="ghost" className="h-8" onClick={clearFinished} disabled={!items.some((i) => i.status !== 'queued' && i.status !== 'processing')}>
               Clear finished
             </Button>

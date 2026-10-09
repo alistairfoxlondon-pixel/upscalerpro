@@ -173,6 +173,42 @@ function postProgress(id: string, rate: number) {
   }
 }
 
+/**
+ * Exact port of UpscalerJS get1DPatch increment logic — lets us know the full
+ * patch-grid dimensions up front so the UI can render a live "patches done"
+ * mosaic while the AI works (see onPatch in store.ts).
+ */
+function gridCount1D(total: number, patchSize: number, padding: number): number {
+  if (patchSize >= total) return 1;
+  let count = 0;
+  let idx = 0;
+  while (idx < total) {
+    const isBeyondBounds = idx + patchSize > total;
+    const prePadding = idx === 0 || patchSize === total ? 0 : padding;
+    const postPadding = isBeyondBounds || patchSize === total ? 0 : padding;
+    idx += patchSize - prePadding - postPadding;
+    count++;
+  }
+  return count;
+}
+
+function postPatch(
+  id: string,
+  row: number,
+  col: number,
+  w: number,
+  h: number
+) {
+  post({
+    type: 'patch',
+    id,
+    row,
+    col,
+    cols: gridCount1D(w, PATCH_SIZE, PADDING),
+    rows: gridCount1D(h, PATCH_SIZE, PADDING),
+  });
+}
+
 function postPhase(id: string, phase: string) {
   post({ type: 'phase', id, phase });
 }
@@ -264,6 +300,8 @@ async function upscaleRgbTensor(
   input: tf.Tensor4D,
   id: string,
   signal: AbortSignal,
+  srcW: number,
+  srcH: number,
   mapRate?: (rate: number) => number
 ): Promise<tf.Tensor3D> {
   return (await upscaler.execute(input, {
@@ -276,10 +314,17 @@ async function upscaleRgbTensor(
     // shallow (prevents readback deadlocks on software renderers) and lets
     // cancellation + progress messages flow
     awaitNextFrame: true,
-    progress: (amount: number, slice: unknown) => {
+    progress: (amount: number, slice: unknown, sliceData?: { row?: number; col?: number }) => {
       // dispose intermediate patch tensors (required when progressOutput is 'tensor')
       if (slice && typeof (slice as tf.Tensor).dispose === 'function') {
         (slice as tf.Tensor).dispose();
+      }
+      if (
+        sliceData &&
+        typeof sliceData.row === 'number' &&
+        typeof sliceData.col === 'number'
+      ) {
+        postPatch(id, sliceData.row, sliceData.col, srcW, srcH);
       }
       postProgress(id, mapRate ? mapRate(amount) : amount);
     },
@@ -367,6 +412,8 @@ async function handleUpscale(msg: Extract<WorkerInMessage, { type: 'upscale' }>)
           input,
           id,
           ac.signal,
+          input.shape[2] as number,
+          input.shape[1] as number,
           // pass 1 (4×) ≈ 22% of the work, pass 2 (2×) ≈ 78% (pixel counts)
           passes.length === 1 ? undefined : p === 0 ? (r) => r * 0.22 : (r) => 0.22 + r * 0.77
         );

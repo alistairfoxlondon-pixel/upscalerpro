@@ -24,7 +24,17 @@ export function CompareModal() {
   const compareId = useStore((s) => s.compareId);
   const setCompare = useStore((s) => s.setCompare);
   const items = useStore((s) => s.items);
-  const [mode, setMode] = React.useState<CompareMode>('slider');
+  const savedMode = useStore((s) => s.settings.compareMode);
+  const setSettings = useStore((s) => s.setSettings);
+  const [mode, setMode] = React.useState<CompareMode>(savedMode);
+  // keep the stored preference in sync (survives reloads)
+  React.useEffect(() => {
+    if (savedMode !== mode) setMode(savedMode);
+  }, [savedMode, mode]);
+  const switchMode = (m: CompareMode) => {
+    setMode(m);
+    setSettings({ compareMode: m });
+  };
   const item =
     items.find((i) => i.id === compareId && i.status === 'done' && i.result) ?? null;
   const r = item?.result ?? null;
@@ -117,7 +127,7 @@ export function CompareModal() {
                       key={id}
                       type="button"
                       aria-pressed={mode === id}
-                      onClick={() => setMode(id)}
+                      onClick={() => switchMode(id)}
                       className={cn(
                         'inline-flex h-7 items-center gap-1.5 rounded-full px-3 text-xs font-medium transition-all',
                         mode === id

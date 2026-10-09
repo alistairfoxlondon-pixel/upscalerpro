@@ -49,13 +49,41 @@ function formatMP(pixels: number): string {
 
 export function Workspace() {
   const items = useStore((s) => s.items);
+  const busy = useStore((s) => s.busy);
   const totals = useStore((s) => s.totals);
   const hasItems = items.length > 0;
 
   // restore persisted user settings after mount (avoids SSR mismatch)
   React.useEffect(() => {
-    void useStore.persist.rehydrate();
+    Promise.resolve(useStore.persist.rehydrate())
+      .then(async () => {
+        // bring back finished results from the previous session (IndexedDB)
+        try {
+          const restored = await useStore.getState().restorePersisted();
+          if (restored > 0) {
+            const { toast } = await import('sonner');
+            toast.success(
+              restored === 1 ? 'Restored 1 result' : `Restored ${restored} results`,
+              { description: 'From your last visit — everything stayed on this device.' }
+            );
+          }
+        } catch {
+          /* persistence is best-effort */
+        }
+      })
+      .catch(() => undefined);
   }, []);
+
+  // guard against closing the tab mid-job (results are local-only)
+  React.useEffect(() => {
+    if (!busy) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [busy]);
 
   const animatedImages = useCountUp(totals.images);
   const animatedPixels = useCountUp(totals.pixelsOut - totals.pixelsIn);
@@ -95,6 +123,9 @@ export function Workspace() {
                   {formatDuration(totals.ms / Math.max(1, totals.images))}
                 </dd>
               </dl>
+              <p className="mt-2.5 border-t border-border/50 pt-2 text-[10px] leading-relaxed text-muted-foreground/80">
+                Finished results are kept in this browser and restored on your next visit.
+              </p>
             </div>
           )}
         </div>

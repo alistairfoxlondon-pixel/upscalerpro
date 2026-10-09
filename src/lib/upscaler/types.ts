@@ -52,5 +52,14 @@ export type WorkerOutMessage =
   | { type: 'phase'; id: string; phase: string }
   | { type: 'model-status'; preset: PresetId; scale: ScaleFactor; status: ModelStatus; message?: string }
   | { type: 'progress'; id: string; rate: number }
+  | {
+      type: 'patch';
+      id: string;
+      /** completed patch indices, row-major */
+      row: number;
+      col: number;
+      cols: number;
+      rows: number;
+    }
   | { type: 'done'; id: string; blob: Blob; width: number; height: number; ms: number }
   | { type: 'error'; id: string; message: string };

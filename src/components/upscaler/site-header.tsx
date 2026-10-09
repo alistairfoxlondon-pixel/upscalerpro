@@ -2,6 +2,7 @@
 
 import { Sparkles, Github } from 'lucide-react';
 import { ThemeToggle } from './theme-toggle';
+import { InstallButton } from './install-button';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 
@@ -33,6 +34,7 @@ export function SiteHeader() {
               <span className="text-xs">Engine</span>
             </Button>
           </a>
+          <InstallButton />
           <ThemeToggle />
           <Button asChild size="sm" className="ml-1 h-9">
             <a href="#workspace">Upscale now</a>
