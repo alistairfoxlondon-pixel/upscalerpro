@@ -3,8 +3,14 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { decodeImageFile } from './decode';
-import { extractExifSegment } from './exif';
-import { MAX_BATCH_FILES, MAX_INPUT_PIXELS, extForFormat, resolveFormat, resolveScale, resolveScaleForTarget, type SizeFit } from './registry';
+import {
+  MAX_BATCH_FILES,
+  MAX_INPUT_PIXELS,
+  MAX_UPLOAD_BYTES,
+  extForFormat,
+  planOutput,
+  resolveFormat,
+} from './registry';
 import {
   idbClearResults,
   idbDeleteResult,
@@ -12,97 +18,25 @@ import {
   idbPutResult,
   type PersistedResult,
 } from './persist';
-import type {
-  FormatChoice,
-  OutputFormat,
-  PresetId,
-  ScaleFactor,
-  WorkerOutMessage,
-} from './types';
+import type { OutputFormat, QueueItem, ResultData, ScaleFactor, Settings } from './types';
 import { formatBytes } from './utils';
 import type { SampleKind } from './utils';
 import { makePreviewUrl, makeThumbUrl } from './utils';
-import { onWorkerMessage, postToWorker, resetWorker } from './worker-client';
 
-export type ItemStatus = 'queued' | 'processing' | 'done' | 'error' | 'canceled';
-
-export interface ResultData {
-  url: string;
-  size: number;
-  w: number;
-  h: number;
-  ms: number;
-  scale: ScaleFactor;
-  preset: PresetId;
-  format: OutputFormat;
-  clamped: boolean;
-  /** target-mode: exact longest side the output was sized to */
-  target?: number;
-}
-
-export interface QueueItem {
-  id: string;
-  /** null for items restored from IndexedDB (original file is not kept) */
-  file: File | null;
-  name: string;
-  mime: string;
-  sizeIn: number;
-  w: number;
-  h: number;
-  thumbUrl: string;
-  originalUrl: string;
-  status: ItemStatus;
-  progress: number; // 0..1
-  phase: string;
-  error?: string;
-  result?: ResultData;
-  cpuRetry?: boolean;
-  /** include in ZIP export (default true) */
-  zip?: boolean;
-  /** live patch-grid completion while processing */
-  patch?: { cols: number; rows: number; done: number } | null;
-  /** true when this item was restored from a previous session */
-  restored?: boolean;
-  /** stall watchdog already gave this job one fresh-context GPU retry */
-  gpuRetry?: boolean;
-}
-
-export interface Settings {
-  preset: PresetId;
-  scale: ScaleFactor;
-  format: FormatChoice;
-  jpegQuality: number;
-  /** 0 = off, 1 = light median denoise, 2 = strong */
-  denoise: 0 | 1 | 2;
-  /** unsharp-mask sharpening after upscale */
-  sharpen: boolean;
-  /** queue layout preference */
-  queueView: 'list' | 'grid';
-  /** preferred compare-modal view */
-  compareMode: 'slider' | 'side';
-  /** remembered pixel-peep zoom level (restored for each comparison) */
-  compareZoom: number;
-  /** how the output size is chosen: fixed multiplier or exact longest side */
-  scaleMode: 'factor' | 'target';
-  /** target-mode: longest output side in px */
-  targetSide: number;
-  /** copy the original EXIF metadata into JPEG outputs (off = scrubbed clean) */
-  keepExif: boolean;
-}
+export type { QueueItem } from './types';
 
 export const DEFAULT_SETTINGS: Settings = {
-  preset: 'balanced',
-  scale: 4,
+  scale: 2,
+  scaleMode: 'factor',
+  targetSide: 1920,
   format: 'auto',
   jpegQuality: 0.92,
   denoise: 0,
-  sharpen: false,
+  sharpen: true,
+  keepExif: false,
   queueView: 'list',
   compareMode: 'slider',
   compareZoom: 1,
-  scaleMode: 'factor',
-  targetSide: 1920,
-  keepExif: false,
 };
 
 export interface Totals {
@@ -114,17 +48,14 @@ export interface Totals {
   bytesOut: number;
 }
 
+const initialTotals: Totals = { images: 0, pixelsIn: 0, pixelsOut: 0, ms: 0, bytesIn: 0, bytesOut: 0 };
+
 interface UpscalerState {
   items: QueueItem[];
   settings: Settings;
   busy: boolean;
   paused: boolean;
   activeId: string | null;
-  backend: string | null;
-  gpu: string | null;
-  modelKey: string | null;
-  modelStatus: 'loading' | 'ready' | 'error' | null;
-  modelMessage: string | null;
   totals: Totals;
   compareId: string | null;
 
@@ -144,144 +75,284 @@ interface UpscalerState {
 
 /* ------------------------------------------------------------------ */
 
-let workerWired = false;
-const pending = new Map<string, { resolve: () => void }>();
-const stallTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const STALL_TIMEOUT_MS = 300_000;
-/** a fresh-context GPU retry after a Finalizing stall gets a shorter leash */
-const GPU_RETRY_TIMEOUT_MS = 180_000;
-let loopRunning = false;
-
-/* ---- patch-grid accumulation (flushed to the store at most ~8×/s) ---- */
-const patchAccum = new Map<string, { cols: number; rows: number; done: number }>();
-let patchFlushTimer: ReturnType<typeof setTimeout> | null = null;
-
-function flushPatches() {
-  patchFlushTimer = null;
-  if (!patchAccum.size) return;
-  const entries = [...patchAccum.entries()];
-  patchAccum.clear();
-  useStore.setState((s) => ({
-    items: s.items.map((it) => {
-      const hit = entries.find(([id]) => id === it.id);
-      return hit ? { ...it, patch: hit[1] } : it;
-    }),
-  }));
-}
-
-function queuePatchFlush() {
-  if (!patchFlushTimer) {
-    patchFlushTimer = setTimeout(flushPatches, 120);
-  }
-}
-
-function onPatch(id: string, row: number, col: number, cols: number, rows: number) {
-  if (!pending.has(id)) return;
-  const prev = patchAccum.get(id);
-  // a pass change (8× chain) swaps the grid dimensions — restart the count
-  const base = prev && prev.cols === cols && prev.rows === rows ? prev : null;
-  const done = Math.max(base?.done ?? 0, row * cols + col + 1);
-  patchAccum.set(id, { cols, rows, done });
-  queuePatchFlush();
-}
-
-function touchStall(id: string) {
-  const prev = stallTimers.get(id);
-  if (prev) clearTimeout(prev);
-  const item = useStore.getState().items.find((i) => i.id === id);
-  const timeout = item?.gpuRetry ? GPU_RETRY_TIMEOUT_MS : STALL_TIMEOUT_MS;
-  stallTimers.set(
-    id,
-    setTimeout(() => {
-      stallTimers.delete(id);
-      onStall(id);
-    }, timeout)
-  );
-}
-
-function clearStall(id: string) {
-  const prev = stallTimers.get(id);
-  if (prev) clearTimeout(prev);
-  stallTimers.delete(id);
-}
-
-async function onStall(id: string) {
-  if (!pending.has(id)) return;
-  const item = useStore.getState().items.find((i) => i.id === id);
-  if (!item) return;
-  const { toast } = await import('sonner');
-  if (item.cpuRetry) {
-    console.error('[pixelforge] processing stalled even on CPU fallback', id);
-    patchItem(id, {
-      status: 'error',
-      phase: 'Failed',
-      error: 'Processing stalled — try a smaller image or the Fast engine',
-      result: undefined,
-    });
-    pending.get(id)?.resolve();
-    pending.delete(id);
-    return;
-  }
-  // The GPU readback is wedged — a cancel cannot unblock the worker's job
-  // chain, so terminate it and give the retry a fresh worker.
-  if (item.gpuRetry) {
-    // Second stall — the fresh GPU context did not survive either. Fall back
-    // to the pure-JS backend: slow but deterministic.
-    toast.info('Graphics engine stalled again — retrying on CPU (slower but reliable)');
-    resetWorker();
-    patchItem(id, {
-      cpuRetry: true,
-      gpuRetry: false,
-      status: 'queued',
-      phase: 'Queued (CPU retry)',
-      progress: 0,
-      result: undefined,
-    });
-  } else if (/^Finalizing/i.test(item.phase)) {
-    // The AI pass already finished — only the GPU→CPU readback is suspect.
-    // A fresh WebGL context is usually healthy again, and re-running the AI
-    // pass is far cheaper than a full CPU inference (which can take minutes).
-    toast.info('Graphics engine stalled during output — retrying on a fresh GPU context');
-    resetWorker();
-    patchItem(id, {
-      gpuRetry: true,
-      status: 'queued',
-      phase: 'Queued (GPU retry)',
-      progress: 0,
-      result: undefined,
-    });
-  } else {
-    // Compute-phase stall — go straight to the reliable CPU fallback.
-    toast.info('Graphics engine stalled — restarting worker and retrying on CPU (slower but reliable)');
-    resetWorker();
-    patchItem(id, {
-      cpuRetry: true,
-      gpuRetry: false,
-      status: 'queued',
-      phase: 'Queued (CPU retry)',
-      progress: 0,
-      result: undefined,
-    });
-  }
-  pending.get(id)?.resolve();
-  pending.delete(id);
-}
-
 function patchItem(id: string, patch: Partial<QueueItem>) {
   useStore.setState((s) => ({
     items: s.items.map((it) => (it.id === id ? { ...it, ...patch } : it)),
   }));
 }
 
+/** In-flight requests, so removing an item cancels its upload. */
+const activeXhrs = new Map<string, XMLHttpRequest>();
+
+function cancelActive(id: string) {
+  const xhr = activeXhrs.get(id);
+  if (xhr) {
+    try {
+      xhr.abort();
+    } catch {
+      /* ignore */
+    }
+    activeXhrs.delete(id);
+  }
+}
+
+interface ServerResult {
+  blob: Blob;
+  width: number;
+  height: number;
+  ms: number;
+}
+
+/** Upload one file to /api/upscale with live progress. */
+function processViaServer(
+  id: string,
+  upload: Blob,
+  params: Record<string, string>,
+  onProgress: (progress: number, phase: string) => void
+): Promise<ServerResult> {
+  return new Promise<ServerResult>((resolve, reject) => {
+    const form = new FormData();
+    form.append('file', upload, 'input');
+    for (const [k, v] of Object.entries(params)) form.append(k, v);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upscale');
+    xhr.responseType = 'blob';
+    activeXhrs.set(id, xhr);
+
+    let creep: ReturnType<typeof setInterval> | null = null;
+    const stopCreep = () => {
+      if (creep) {
+        clearInterval(creep);
+        creep = null;
+      }
+    };
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        onProgress(0.02 + 0.26 * (e.loaded / Math.max(1, e.total)), 'Uploading');
+      }
+    };
+    xhr.upload.onload = () => {
+      onProgress(0.3, 'Processing');
+      // gentle indeterminate creep while the server works
+      creep = setInterval(() => {
+        const it = useStore.getState().items.find((i) => i.id === id);
+        if (!it || it.status !== 'processing') return;
+        onProgress(Math.min(0.72, it.progress + 0.012), 'Processing');
+      }, 500);
+    };
+    xhr.onprogress = (e) => {
+      stopCreep();
+      if (e.lengthComputable && e.total > 0) {
+        onProgress(0.74 + 0.24 * (e.loaded / e.total), 'Downloading');
+      }
+    };
+    xhr.onload = () => {
+      stopCreep();
+      activeXhrs.delete(id);
+      if (xhr.status >= 200 && xhr.status < 300 && xhr.response instanceof Blob) {
+        const width = Number(xhr.getResponseHeader('X-Image-Width')) || 0;
+        const height = Number(xhr.getResponseHeader('X-Image-Height')) || 0;
+        const ms = Number(xhr.getResponseHeader('X-Process-Ms')) || 0;
+        resolve({ blob: xhr.response as Blob, width, height, ms });
+      } else {
+        const fail = (msg: string) => reject(new Error(msg));
+        const body = xhr.response;
+        if (body instanceof Blob && typeof body.text === 'function') {
+          body
+            .text()
+            .then((t) => {
+              try {
+                const j = JSON.parse(t) as { error?: string };
+                fail(j.error || `Processing failed (${xhr.status})`);
+              } catch {
+                fail(`Processing failed (${xhr.status})`);
+              }
+            })
+            .catch(() => fail(`Processing failed (${xhr.status})`));
+        } else {
+          fail(`Processing failed (${xhr.status})`);
+        }
+      }
+    };
+    xhr.onerror = () => {
+      stopCreep();
+      activeXhrs.delete(id);
+      reject(new Error('Network error while uploading'));
+    };
+    xhr.onabort = () => {
+      stopCreep();
+      activeXhrs.delete(id);
+      reject(new Error('Canceled'));
+    };
+    xhr.send(form);
+  });
+}
+
+/**
+ * Vercel accepts about 4.5 MB per request. Oversized inputs are re-encoded
+ * client side (stepped down until they fit) so every deploy stays usable.
+ */
+async function fitUpload(file: File): Promise<Blob> {
+  const { bitmap } = await decodeImageFile(file);
+  try {
+    for (const maxSide of [3072, 2048, 1536, 1024, 768]) {
+      const ratio = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+      const w = Math.max(1, Math.round(bitmap.width * ratio));
+      const h = Math.max(1, Math.round(bitmap.height * ratio));
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Canvas unavailable');
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(bitmap, 0, 0, w, h);
+      for (const [type, q] of [
+        ['image/webp', 0.92],
+        ['image/jpeg', 0.9],
+      ] as const) {
+        const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, type, q));
+        if (blob && blob.size <= MAX_UPLOAD_BYTES) return blob;
+      }
+    }
+    throw new Error('Image is too large to upload even after compression');
+  } finally {
+    bitmap.close();
+  }
+}
+
+async function processItem(id: string): Promise<void> {
+  const state = useStore.getState();
+  const item = state.items.find((i) => i.id === id);
+  if (!item) return;
+  if (!item.file) {
+    patchItem(id, {
+      status: 'error',
+      phase: 'Failed',
+      error: 'Original file is not kept after a reload. Add the image again.',
+    });
+    return;
+  }
+  const settings = state.settings;
+  const resolved: OutputFormat =
+    settings.format === 'auto' ? resolveFormat(item.mime, item.name) : settings.format;
+
+  const fit = planOutput(item.w, item.h, settings);
+  if (!fit || fit.error) {
+    patchItem(id, {
+      status: 'error',
+      phase: 'Failed',
+      error: fit?.error ?? 'Image is too large to upscale',
+    });
+    return;
+  }
+
+  patchItem(id, {
+    status: 'processing',
+    progress: 0.02,
+    phase: 'Uploading',
+    error: undefined,
+  });
+  useStore.setState({ activeId: id });
+
+  const planned: ResultData = {
+    url: '',
+    size: 0,
+    w: fit.outW,
+    h: fit.outH,
+    ms: 0,
+    scale: fit.scale,
+    format: resolved,
+    clamped: fit.clamped ?? false,
+    target:
+      settings.scaleMode === 'target' && !fit.short && !fit.error ? settings.targetSide : undefined,
+  };
+  patchItem(id, { result: planned });
+
+  try {
+    let upload: Blob = item.file;
+    if (item.file.size > MAX_UPLOAD_BYTES) {
+      patchItem(id, { phase: 'Optimizing' });
+      upload = await fitUpload(item.file);
+      patchItem(id, { optimized: true });
+      const { toast } = await import('sonner');
+      toast.info('Large image optimized before upload', {
+        description: `${formatBytes(item.sizeIn)} in, ${formatBytes(upload.size)} sent.`,
+      });
+    }
+
+    const res = await processViaServer(
+      id,
+      upload,
+      {
+        scale: String(fit.scale),
+        target: planned.target ? String(planned.target) : '',
+        denoise: String(settings.denoise),
+        sharpen: settings.sharpen ? '1' : '0',
+        format: resolved,
+        quality: String(settings.jpegQuality),
+        exif: settings.keepExif && resolved === 'jpeg' ? '1' : '0',
+      },
+      (progress, phase) => patchItem(id, { progress, phase })
+    );
+
+    const url = URL.createObjectURL(res.blob);
+    const result: ResultData = {
+      url,
+      size: res.blob.size,
+      w: res.width || fit.outW,
+      h: res.height || fit.outH,
+      ms: res.ms,
+      scale: fit.scale,
+      format: res.blob.type.includes('jpeg')
+        ? 'jpeg'
+        : res.blob.type.includes('webp')
+          ? 'webp'
+          : 'png',
+      clamped: fit.clamped ?? false,
+      target: planned.target,
+    };
+    patchItem(id, { status: 'done', progress: 1, phase: 'Done', result });
+    useStore.setState((s) => ({
+      totals: {
+        images: s.totals.images + 1,
+        pixelsIn: s.totals.pixelsIn + item.w * item.h,
+        pixelsOut: s.totals.pixelsOut + result.w * result.h,
+        ms: s.totals.ms + result.ms,
+        bytesIn: s.totals.bytesIn + item.sizeIn,
+        bytesOut: s.totals.bytesOut + result.size,
+      },
+    }));
+    void savePersisted(item, res.blob, result);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Processing failed';
+    const canceled = /^canceled$/i.test(msg);
+    patchItem(id, {
+      status: canceled ? 'canceled' : 'error',
+      phase: canceled ? 'Canceled' : 'Failed',
+      error: canceled ? undefined : msg,
+      progress: 0,
+    });
+    if (!canceled) {
+      console.error('[pixelforge]', msg);
+      void import('sonner').then(({ toast }) =>
+        toast.error('Upscaling failed', { description: msg })
+      );
+    }
+  }
+}
+
 /**
  * Persist a finished result to IndexedDB so it can be restored after a
- * reload. The original is re-encoded to a capped preview; thumbnails are
- * already small. Never throws.
+ * reload. Never throws.
  */
 async function savePersisted(item: QueueItem, blob: Blob, result: ResultData) {
   try {
     const [thumbBlob, originalBlob] = await Promise.all([
-      fetch(item.thumbUrl).then((r) => r.blob()).catch(() => null),
+      fetch(item.thumbUrl)
+        .then((r) => r.blob())
+        .catch(() => null),
       item.originalUrl
         ? makePreviewUrlFromUrl(item.originalUrl).catch(() => null)
         : Promise.resolve(null),
@@ -301,7 +372,6 @@ async function savePersisted(item: QueueItem, blob: Blob, result: ResultData) {
         h: result.h,
         ms: result.ms,
         scale: result.scale,
-        preset: result.preset,
         format: result.format,
         clamped: result.clamped,
         target: result.target,
@@ -336,228 +406,6 @@ async function makePreviewUrlFromUrl(url: string, maxSide = 2048): Promise<Blob>
   }
 }
 
-function wireWorker() {
-  if (workerWired) return;
-  workerWired = true;
-  onWorkerMessage((m: WorkerOutMessage) => {
-    const state = useStore.getState();
-    switch (m.type) {
-      case 'backend':
-        useStore.setState({ backend: m.backend, gpu: m.renderer ?? null });
-        break;
-      case 'debug':
-        console.info('[pf-worker]', m.text);
-        break;
-      case 'phase':
-        if (pending.has(m.id)) {
-          touchStall(m.id);
-          patchItem(m.id, { phase: m.phase });
-        }
-        break;
-      case 'model-status': {
-        const key = `${m.preset}:${m.scale}`;
-        if (state.modelKey === key || m.status === 'error') {
-          useStore.setState({ modelStatus: m.status, modelMessage: m.message ?? null });
-        }
-        if (m.status === 'loading' && state.activeId) {
-          patchItem(state.activeId, { phase: 'Loading AI model' });
-          touchStall(state.activeId);
-        }
-        if (m.status === 'ready' && state.activeId) {
-          const active = state.items.find((i) => i.id === state.activeId);
-          if (active && active.phase === 'Loading AI model') {
-            patchItem(active.id, { phase: 'Upscaling' });
-          }
-        }
-        break;
-      }
-      case 'progress':
-        touchStall(m.id);
-        patchItem(m.id, {
-          progress: 0.02 + m.rate * 0.93,
-          phase: m.rate >= 0.999 ? 'Finalizing' : 'Upscaling',
-        });
-        break;
-      case 'patch':
-        onPatch(m.id, m.row, m.col, m.cols, m.rows);
-        break;
-      case 'done': {
-        if (!pending.has(m.id)) break; // stale message (item re-queued or removed)
-        clearStall(m.id);
-        patchAccum.delete(m.id);
-        const item = state.items.find((i) => i.id === m.id);
-        const url = URL.createObjectURL(m.blob);
-        const planned = item?.result;
-        const result: ResultData = {
-          url,
-          size: m.blob.size,
-          w: m.width,
-          h: m.height,
-          ms: m.ms,
-          scale: (planned?.scale ?? useStore.getState().settings.scale) as ScaleFactor,
-          preset: (planned?.preset ?? useStore.getState().settings.preset) as PresetId,
-          format: m.blob.type.includes('jpeg')
-            ? 'jpeg'
-            : m.blob.type.includes('webp')
-              ? 'webp'
-              : 'png',
-          clamped: planned?.clamped ?? false,
-          target: planned?.target,
-        };
-        patchItem(m.id, {
-          status: 'done',
-          progress: 1,
-          phase: 'Done',
-          result,
-          patch: null,
-        });
-        useStore.setState((s) => ({
-          totals: {
-            images: s.totals.images + 1,
-            pixelsIn: s.totals.pixelsIn + (item ? item.w * item.h : 0),
-            pixelsOut: s.totals.pixelsOut + m.width * m.height,
-            ms: s.totals.ms + m.ms,
-            bytesIn: s.totals.bytesIn + (item?.sizeIn ?? 0),
-            bytesOut: s.totals.bytesOut + m.blob.size,
-          },
-        }));
-        pending.get(m.id)?.resolve();
-        pending.delete(m.id);
-        // persist the finished result so it survives a reload (best-effort)
-        if (item) void savePersisted(item, m.blob, result);
-        break;
-      }
-      case 'error': {
-        if (!pending.has(m.id)) break; // stale message (item re-queued or removed)
-        clearStall(m.id);
-        patchAccum.delete(m.id);
-        const canceled = /^canceled$/i.test(m.message);
-        patchItem(m.id, {
-          status: canceled ? 'canceled' : 'error',
-          phase: canceled ? 'Canceled' : 'Failed',
-          error: canceled ? undefined : m.message,
-          progress: 0,
-          result: undefined,
-        });
-        if (!canceled) {
-          console.error('[pixelforge]', m.message);
-          void import('sonner').then(({ toast }) =>
-            toast.error('Upscaling failed', { description: m.message })
-          );
-        }
-        pending.get(m.id)?.resolve();
-        pending.delete(m.id);
-        break;
-      }
-    }
-  });
-}
-
-async function processItem(id: string): Promise<void> {
-  const state = useStore.getState();
-  const item = state.items.find((i) => i.id === id);
-  if (!item) return;
-  if (!item.file) {
-    // restored items have no source file — treat as informational failure
-    patchItem(id, {
-      status: 'error',
-      phase: 'Failed',
-      error: 'Original file is not kept after a reload — add the image again',
-    });
-    return;
-  }
-  const { preset, scale, format, jpegQuality, denoise, sharpen, keepExif } = state.settings;
-
-  patchItem(id, {
-    status: 'processing',
-    progress: 0,
-    phase: 'Preparing',
-    error: undefined,
-    patch: null,
-  });
-  useStore.setState({ activeId: id });
-
-  const resolved: OutputFormat = format === 'auto' ? resolveFormat(item.mime, item.name) : format;
-
-  // memory safety: pick the largest allowed scale (factor mode) or the smallest
-  // AI scale that meets the target size, then resize (target mode)
-  const fit: SizeFit | null =
-    state.settings.scaleMode === 'target'
-      ? resolveScaleForTarget(item.w, item.h, state.settings.targetSide)
-      : resolveScale(item.w, item.h, scale);
-  if (!fit || fit.error) {
-    patchItem(id, {
-      status: 'error',
-      phase: 'Failed',
-      error: fit?.error ?? 'Image is too large to upscale on this device',
-    });
-    return;
-  }
-
-  try {
-    const { bitmap } = await decodeImageFile(item.file);
-    const modelKey = `${preset}:${fit.scale}`;
-    useStore.setState({ modelKey, modelStatus: null, modelMessage: null });
-    // planned result placeholder — carries the plan (scale/format) and
-    // estimated output size until the worker reports the real values
-    const planned: ResultData = {
-      url: '',
-      size: 0,
-      w: fit.outW,
-      h: fit.outH,
-      ms: 0,
-      scale: fit.scale,
-      preset,
-      format: resolved,
-      clamped: fit.clamped ?? false,
-      target:
-        state.settings.scaleMode === 'target' && !fit.short && !fit.error
-          ? state.settings.targetSide
-          : undefined,
-    };
-    patchItem(id, {
-      phase: 'Loading model',
-      progress: 0.01,
-      result: planned,
-    });
-    // Opt-in metadata preservation: pull the original JPEG APP1 EXIF segment
-    // (first 256 KB header scan — cheap) so the worker can splice it into the
-    // encoded output. Only meaningful for JPEG results.
-    const exif =
-      keepExif && resolved === 'jpeg' ? await extractExifSegment(item.file) : null;
-    const done = new Promise<void>((resolve) => pending.set(id, { resolve }));
-    touchStall(id);
-    const transfer: Transferable[] = [bitmap];
-    if (exif) transfer.push(exif);
-    postToWorker(
-      {
-        type: 'upscale',
-        id,
-        bitmap,
-        scale: fit.scale,
-        preset,
-        format: resolved,
-        quality: jpegQuality,
-        denoise,
-        sharpen,
-        exif: exif ?? undefined,
-        targetSide: planned.target,
-        backendHint: item.cpuRetry ? 'cpu' : undefined,
-      },
-      transfer
-    );
-    await done;
-    clearStall(id);
-  } catch (err) {
-    patchItem(id, {
-      status: 'error',
-      phase: 'Failed',
-      error: err instanceof Error ? err.message : 'Could not decode image',
-      result: undefined,
-    });
-  }
-}
-
 async function ensureLoop() {
   if (loopRunning) return;
   loopRunning = true;
@@ -576,266 +424,270 @@ async function ensureLoop() {
   } finally {
     loopRunning = false;
     useStore.setState({ busy: false, activeId: null });
-    // batch-complete feedback with a one-tap ZIP export
     if (completed > 0 && !useStore.getState().paused) {
       const { toast } = await import('sonner');
-      toast.success(completed === 1 ? '1 image ready' : `${completed} images ready`, {
-        description: 'Processed entirely on this device.',
-        action: { label: 'Download ZIP', onClick: () => void downloadAllAsZip() },
-        duration: 10_000,
-      });
+      toast.success(
+        completed === 1 ? '1 image ready' : `${completed} images ready`,
+        {
+          description: 'Processed on the server. Download or export a ZIP.',
+          action: { label: 'Download ZIP', onClick: () => void downloadAllAsZip() },
+          duration: 10_000,
+        }
+      );
     }
   }
 }
 
-/* ------------------------------------------------------------------ */
+let loopRunning = false;
 
-const initialTotals: Totals = {
-  images: 0,
-  pixelsIn: 0,
-  pixelsOut: 0,
-  ms: 0,
-  bytesIn: 0,
-  bytesOut: 0,
-};
+/* ------------------------------------------------------------------ */
 
 export const useStore = create<UpscalerState>()(
   persist(
     (set, get) => ({
-  items: [],
-  settings: { ...DEFAULT_SETTINGS },
-  busy: false,
-  paused: false,
-  activeId: null,
-  backend: null,
-  gpu: null,
-  modelKey: null,
-  modelStatus: null,
-  modelMessage: null,
-  totals: initialTotals,
-  compareId: null,
+      items: [],
+      settings: { ...DEFAULT_SETTINGS },
+      busy: false,
+      paused: false,
+      activeId: null,
+      totals: initialTotals,
+      compareId: null,
 
-  addFiles: async (files) => {
-    wireWorker();
-    const list = files.filter(
-      (f) =>
-        f.size > 0 &&
-        (f.type.startsWith('image/') || /\.(heic|heif|hif|tif|tiff|avif|webp|bmp)$/i.test(f.name))
-    );
-    if (!list.length) {
-      const { toast } = await import('sonner');
-      toast.error('No supported images found', {
-        description: 'Drop JPEG, PNG, WebP, AVIF, GIF, BMP, HEIC or TIFF files.',
-      });
-      return;
-    }
-    const capped = list.slice(0, MAX_BATCH_FILES);
-    // duplicate guard: same name + byte size already queued (or twice in this
-    // batch) — a re-added file would just waste GPU time on an identical job
-    const seen = new Set<string>();
-    for (const it of useStore.getState().items) {
-      if (it.file) seen.add(`${it.name}:${it.sizeIn}`);
-    }
-    let dupes = 0;
-    const items: QueueItem[] = [];
-    for (const file of capped) {
-      const key = `${file.name || 'image'}:${file.size}`;
-      if (seen.has(key)) {
-        dupes++;
-        continue;
-      }
-      seen.add(key);
-      const id = crypto.randomUUID();
-      const name = file.name || `image-${id.slice(0, 6)}`;
-      try {
-        const { bitmap, renderable } = await decodeImageFile(file);
-        const pixels = bitmap.width * bitmap.height;
-        if (pixels > MAX_INPUT_PIXELS) {
-          bitmap.close();
-          items.push({
-            id, file, name, mime: file.type || 'image/*', sizeIn: file.size,
-            w: 0, h: 0, thumbUrl: '', originalUrl: '',
-            status: 'error', progress: 0, phase: 'Failed',
-            error: `Image is ${Math.round(pixels / 1e6)}MP — max input is ${Math.round(MAX_INPUT_PIXELS / 1e6)}MP`,
+      addFiles: async (files) => {
+        const list = files.filter(
+          (f) =>
+            f.size > 0 &&
+            (f.type.startsWith('image/') || /\.(heic|heif|hif|tif|tiff|avif|webp|bmp)$/i.test(f.name))
+        );
+        if (!list.length) {
+          const { toast } = await import('sonner');
+          toast.error('No supported images found', {
+            description: 'Drop JPEG, PNG, WebP, AVIF, GIF, BMP, HEIC or TIFF files.',
           });
-          continue;
+          return;
         }
-        const thumbUrl = await makeThumbUrl(bitmap);
-        const originalUrl = renderable ? URL.createObjectURL(file) : await makePreviewUrl(bitmap);
-        const w = bitmap.width;
-        const h = bitmap.height;
-        bitmap.close();
-        items.push({
-          id, file, name, mime: file.type || 'image/*', sizeIn: file.size,
-          w, h, thumbUrl, originalUrl,
-          status: 'queued', progress: 0, phase: 'Queued',
-        });
-      } catch (err) {
-        items.push({
-          id, file, name, mime: file.type || 'image/*', sizeIn: file.size,
-          w: 0, h: 0, thumbUrl: '', originalUrl: '',
-          status: 'error', progress: 0, phase: 'Failed',
-          error: err instanceof Error ? err.message : 'Could not decode image',
-        });
-      }
-    }
-    set((s) => ({ items: [...s.items, ...items] }));
-    if (dupes > 0) {
-      const { toast } = await import('sonner');
-      toast.info(`${dupes} duplicate file${dupes > 1 ? 's' : ''} skipped`, {
-        description: 'Already in the queue.',
-      });
-    }
-    const skipped = list.length - capped.length;
-    if (skipped > 0) {
-      const { toast } = await import('sonner');
-      toast.warning(`${skipped} file${skipped > 1 ? 's' : ''} skipped`, {
-        description: `Batch limit is ${MAX_BATCH_FILES} images at a time.`,
-      });
-    }
-    void ensureLoop();
-  },
+        const capped = list.slice(0, MAX_BATCH_FILES);
+        // duplicate guard: same name + byte size already queued (or twice in
+        // this batch) would just waste time on an identical job
+        const seen = new Set<string>();
+        for (const it of useStore.getState().items) {
+          if (it.file) seen.add(`${it.name}:${it.sizeIn}`);
+        }
+        let dupes = 0;
+        const items: QueueItem[] = [];
+        for (const file of capped) {
+          const key = `${file.name || 'image'}:${file.size}`;
+          if (seen.has(key)) {
+            dupes++;
+            continue;
+          }
+          seen.add(key);
+          const id = crypto.randomUUID();
+          const name = file.name || `image-${id.slice(0, 6)}`;
+          try {
+            const { bitmap, renderable } = await decodeImageFile(file);
+            const pixels = bitmap.width * bitmap.height;
+            if (pixels > MAX_INPUT_PIXELS) {
+              bitmap.close();
+              items.push({
+                id,
+                file,
+                name,
+                mime: file.type || 'image/*',
+                sizeIn: file.size,
+                w: 0,
+                h: 0,
+                thumbUrl: '',
+                originalUrl: '',
+                status: 'error',
+                progress: 0,
+                phase: 'Failed',
+                error: `Image is ${Math.round(pixels / 1e6)}MP. Max input is ${Math.round(MAX_INPUT_PIXELS / 1e6)}MP.`,
+              });
+              continue;
+            }
+            const thumbUrl = await makeThumbUrl(bitmap);
+            const originalUrl = renderable ? URL.createObjectURL(file) : await makePreviewUrl(bitmap);
+            const w = bitmap.width;
+            const h = bitmap.height;
+            bitmap.close();
+            items.push({
+              id,
+              file,
+              name,
+              mime: file.type || 'image/*',
+              sizeIn: file.size,
+              w,
+              h,
+              thumbUrl,
+              originalUrl,
+              status: 'queued',
+              progress: 0,
+              phase: 'Queued',
+            });
+          } catch (err) {
+            items.push({
+              id,
+              file,
+              name,
+              mime: file.type || 'image/*',
+              sizeIn: file.size,
+              w: 0,
+              h: 0,
+              thumbUrl: '',
+              originalUrl: '',
+              status: 'error',
+              progress: 0,
+              phase: 'Failed',
+              error: err instanceof Error ? err.message : 'Could not decode image',
+            });
+          }
+        }
+        set((s) => ({ items: [...s.items, ...items] }));
+        if (dupes > 0) {
+          const { toast } = await import('sonner');
+          toast.info(`${dupes} duplicate file${dupes > 1 ? 's' : ''} skipped`, {
+            description: 'Already in the queue.',
+          });
+        }
+        const skipped = list.length - capped.length;
+        if (skipped > 0) {
+          const { toast } = await import('sonner');
+          toast.warning(`${skipped} file${skipped > 1 ? 's' : ''} skipped`, {
+            description: `Batch limit is ${MAX_BATCH_FILES} images at a time.`,
+          });
+        }
+        void ensureLoop();
+      },
 
-  addSample: async (kind: SampleKind = 'photo') => {
-    const { createSampleFile } = await import('./utils');
-    try {
-      const file = await createSampleFile(kind);
-      await get().addFiles([file]);
-    } catch (err) {
-      const { toast } = await import('sonner');
-      toast.error('Could not create the sample image');
-      console.error(err);
-    }
-  },
+      addSample: async (kind: SampleKind = 'photo') => {
+        const { createSampleFile } = await import('./utils');
+        try {
+          const file = await createSampleFile(kind);
+          await get().addFiles([file]);
+        } catch (err) {
+          const { toast } = await import('sonner');
+          toast.error('Could not create the sample image');
+          console.error(err);
+        }
+      },
 
-  removeItem: (id) => {
-    const s = get();
-    const item = s.items.find((i) => i.id === id);
-    if (!item) return;
-    if (item.status === 'processing') {
-      postToWorker({ type: 'cancel', id });
-    }
-    if (item.thumbUrl) URL.revokeObjectURL(item.thumbUrl);
-    if (item.originalUrl) URL.revokeObjectURL(item.originalUrl);
-    if (item.result?.url) URL.revokeObjectURL(item.result.url);
-    void idbDeleteResult(id);
-    set((st) => ({
-      items: st.items.filter((i) => i.id !== id),
-      compareId: st.compareId === id ? null : st.compareId,
-    }));
-  },
-
-  clearFinished: () => {
-    const s = get();
-    for (const item of s.items) {
-      if (item.status === 'done' || item.status === 'canceled' || item.status === 'error') {
+      removeItem: (id) => {
+        const s = get();
+        const item = s.items.find((i) => i.id === id);
+        if (!item) return;
+        cancelActive(id);
         if (item.thumbUrl) URL.revokeObjectURL(item.thumbUrl);
         if (item.originalUrl) URL.revokeObjectURL(item.originalUrl);
         if (item.result?.url) URL.revokeObjectURL(item.result.url);
-        void idbDeleteResult(item.id);
-      }
-    }
-    set((st) => ({
-      items: st.items.filter(
-        (i) => i.status === 'queued' || i.status === 'processing'
-      ),
-      compareId: null,
-    }));
-  },
+        void idbDeleteResult(id);
+        set((st) => ({
+          items: st.items.filter((i) => i.id !== id),
+          compareId: st.compareId === id ? null : st.compareId,
+        }));
+      },
 
-  clearAll: () => {
-    const s = get();
-    for (const item of s.items) {
-      if (item.status === 'processing') {
-        postToWorker({ type: 'cancel', id: item.id });
-      }
-      if (item.thumbUrl) URL.revokeObjectURL(item.thumbUrl);
-      if (item.originalUrl) URL.revokeObjectURL(item.originalUrl);
-      if (item.result?.url) URL.revokeObjectURL(item.result.url);
-    }
-    void idbClearResults();
-    set({ items: [], compareId: null, totals: initialTotals });
-  },
+      clearFinished: () => {
+        const s = get();
+        for (const item of s.items) {
+          if (item.status === 'done' || item.status === 'canceled' || item.status === 'error') {
+            if (item.thumbUrl) URL.revokeObjectURL(item.thumbUrl);
+            if (item.originalUrl) URL.revokeObjectURL(item.originalUrl);
+            if (item.result?.url) URL.revokeObjectURL(item.result.url);
+            void idbDeleteResult(item.id);
+          }
+        }
+        set((st) => ({
+          items: st.items.filter((i) => i.status === 'queued' || i.status === 'processing'),
+          compareId: null,
+        }));
+      },
 
-  retry: (id) => {
-    patchItem(id, {
-      status: 'queued',
-      progress: 0,
-      phase: 'Queued',
-      error: undefined,
-      result: undefined,
-      cpuRetry: false,
-      gpuRetry: false,
-      patch: null,
-    });
-    void ensureLoop();
-  },
+      clearAll: () => {
+        const s = get();
+        for (const item of s.items) {
+          cancelActive(item.id);
+          if (item.thumbUrl) URL.revokeObjectURL(item.thumbUrl);
+          if (item.originalUrl) URL.revokeObjectURL(item.originalUrl);
+          if (item.result?.url) URL.revokeObjectURL(item.result.url);
+        }
+        void idbClearResults();
+        set({ items: [], compareId: null, totals: initialTotals });
+      },
 
-  toggleZip: (id) => {
-    useStore.setState((s) => ({
-      items: s.items.map((it) =>
-        it.id === id ? { ...it, zip: it.zip === false } : it
-      ),
-    }));
-  },
+      retry: (id) => {
+        patchItem(id, {
+          status: 'queued',
+          progress: 0,
+          phase: 'Queued',
+          error: undefined,
+          result: undefined,
+        });
+        void ensureLoop();
+      },
 
-  restorePersisted: async () => {
-    let rows: Array<PersistedResult & { id: string }> = [];
-    try {
-      rows = await idbLoadResults();
-    } catch {
-      return 0;
-    }
-    if (!rows.length) return 0;
-    const existing = new Set(useStore.getState().items.map((i) => i.id));
-    const items: QueueItem[] = [];
-    for (const row of rows) {
-      if (existing.has(row.id)) continue;
-      items.push({
-        id: row.id,
-        file: null,
-        name: row.name,
-        mime: row.mime,
-        sizeIn: row.sizeIn,
-        w: row.w,
-        h: row.h,
-        thumbUrl: URL.createObjectURL(row.thumb),
-        originalUrl: URL.createObjectURL(row.original),
-        status: 'done',
-        progress: 1,
-        phase: 'Done',
-        result: {
-          url: URL.createObjectURL(row.result.blob),
-          size: row.result.blob.size,
-          w: row.result.w,
-          h: row.result.h,
-          ms: row.result.ms,
-          scale: row.result.scale,
-          preset: row.result.preset,
-          format: row.result.format,
-          clamped: row.result.clamped,
-          target: row.result.target,
-        },
-        restored: true,
-      });
-    }
-    if (items.length) {
-      set((s) => ({ items: [...items, ...s.items] }));
-    }
-    return items.length;
-  },
+      toggleZip: (id) => {
+        useStore.setState((s) => ({
+          items: s.items.map((it) => (it.id === id ? { ...it, zip: it.zip === false } : it)),
+        }));
+      },
 
-  setSettings: (patch) => {
-    set((s) => ({ settings: { ...s.settings, ...patch } }));
-  },
+      restorePersisted: async () => {
+        let rows: Array<PersistedResult & { id: string }> = [];
+        try {
+          rows = await idbLoadResults();
+        } catch {
+          return 0;
+        }
+        if (!rows.length) return 0;
+        const existing = new Set(useStore.getState().items.map((i) => i.id));
+        const items: QueueItem[] = [];
+        for (const row of rows) {
+          if (existing.has(row.id)) continue;
+          items.push({
+            id: row.id,
+            file: null,
+            name: row.name,
+            mime: row.mime,
+            sizeIn: row.sizeIn,
+            w: row.w,
+            h: row.h,
+            thumbUrl: URL.createObjectURL(row.thumb),
+            originalUrl: URL.createObjectURL(row.original),
+            status: 'done',
+            progress: 1,
+            phase: 'Done',
+            result: {
+              url: URL.createObjectURL(row.result.blob),
+              size: row.result.blob.size,
+              w: row.result.w,
+              h: row.result.h,
+              ms: row.result.ms,
+              scale: row.result.scale,
+              format: row.result.format,
+              clamped: row.result.clamped,
+              target: row.result.target,
+            },
+            restored: true,
+          });
+        }
+        if (items.length) {
+          set((s) => ({ items: [...items, ...s.items] }));
+        }
+        return items.length;
+      },
 
-  togglePause: () => {
-    const wasPaused = get().paused;
-    set({ paused: !wasPaused });
-    if (wasPaused) void ensureLoop();
-  },
+      setSettings: (patch) => {
+        set((s) => ({ settings: { ...s.settings, ...patch } }));
+      },
 
-  setCompare: (id) => set({ compareId: id }),
+      togglePause: () => {
+        const wasPaused = get().paused;
+        set({ paused: !wasPaused });
+        if (wasPaused) void ensureLoop();
+      },
+
+      setCompare: (id) => set({ compareId: id }),
     }),
     {
       name: 'pixelforge-settings',
@@ -897,7 +749,10 @@ export async function downloadAllAsZip() {
       let filename = resultFilename(item.name, r.scale, r.format, r.target);
       let i = 1;
       while (used.has(filename)) {
-        filename = resultFilename(item.name, r.scale, r.format, r.target).replace(/(\.\w+)$/, `-${i++}$1`);
+        filename = resultFilename(item.name, r.scale, r.format, r.target).replace(
+          /(\.\w+)$/,
+          `_${i++}$1`
+        );
       }
       used.add(filename);
       const blob = await (await fetch(r.url)).blob();
@@ -905,8 +760,8 @@ export async function downloadAllAsZip() {
     }
     const out = await zip.generateAsync({ type: 'blob' });
     const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
-    downloadBlob(out, `pixelforge-upscaled-${stamp}.zip`);
-    toast.success(`ZIP ready — ${formatBytes(out.size)}`, { id: t });
+    downloadBlob(out, `pixelforge_${stamp}.zip`);
+    toast.success(`ZIP ready. ${formatBytes(out.size)}`, { id: t });
   } catch (err) {
     console.error(err);
     toast.error('Could not build the ZIP archive', { id: t });

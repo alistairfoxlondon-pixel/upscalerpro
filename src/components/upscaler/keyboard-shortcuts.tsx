@@ -78,7 +78,7 @@ export function KeyboardShortcuts() {
             Keyboard shortcuts
           </DialogTitle>
           <DialogDescription className="text-xs">
-            Everything works by mouse too — these just speed things up.
+            Everything works by mouse too. These just speed things up.
           </DialogDescription>
         </DialogHeader>
         <ul className="mt-1 space-y-2.5 text-sm">

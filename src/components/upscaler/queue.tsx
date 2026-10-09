@@ -2,9 +2,14 @@
 
 import * as React from 'react';
 import {
+  CircleAlert,
+  CircleCheck,
+  Clock,
+  Cloud,
+  Copy,
   Download,
   Eye,
-  History,
+  FileArchive,
   Keyboard,
   LayoutGrid,
   LayoutList,
@@ -15,38 +20,31 @@ import {
   RotateCcw,
   Timer,
   Trash2,
-  FileArchive,
   X,
-  CircleCheck,
-  CircleAlert,
   Ban,
-  Clock,
-  Cpu,
-  Copy,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { PRESETS } from '@/lib/upscaler/registry';
 import {
   downloadAllAsZip,
   downloadBlob,
   resultFilename,
   useStore,
 } from '@/lib/upscaler/store';
-import { formatBytes, formatDuration, copyImageToClipboard } from '@/lib/upscaler/utils';
+import { copyImageToClipboard, formatBytes, formatDuration } from '@/lib/upscaler/utils';
 import { openShortcuts } from './keyboard-shortcuts';
 import type { QueueItem } from '@/lib/upscaler/store';
 import { cn } from '@/lib/utils';
 
 const statusStyle: Record<QueueItem['status'], string> = {
-  queued: 'bg-muted text-muted-foreground',
+  queued: 'bg-secondary text-secondary-foreground',
   processing: 'bg-primary/15 text-primary',
-  done: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
-  error: 'bg-red-500/15 text-red-600 dark:text-red-400',
-  canceled: 'bg-muted text-muted-foreground line-through',
+  done: 'bg-emerald-600/15 text-emerald-700 dark:text-emerald-400',
+  error: 'bg-red-600/15 text-red-600 dark:text-red-400',
+  canceled: 'bg-secondary text-muted-foreground line-through',
 };
 
 const statusIcon: Record<QueueItem['status'], React.ReactNode> = {
@@ -96,51 +94,13 @@ function ProgressRing({ progress }: { progress: number }) {
   );
 }
 
-/**
- * Live AI patch mosaic — every cell is one 128px patch the neural engine has
- * finished. Giant grids (>220 patches) fall back to a sampled 16×12 mosaic so
- * DOM size stays bounded while the look stays accurate.
- */
-function PatchGrid({ patch }: { patch: NonNullable<QueueItem['patch']> }) {
-  const total = patch.cols * patch.rows;
-  if (total <= 1) return null;
-  const sampled = total > 220 ? { cols: 16, rows: 12 } : { cols: patch.cols, rows: patch.rows };
-  const shownTotal = sampled.cols * sampled.rows;
-  const doneShown = Math.min(shownTotal, Math.round((patch.done / total) * shownTotal));
-  const cells: React.ReactNode[] = [];
-  for (let i = 0; i < shownTotal; i++) {
-    const isDone = i < doneShown;
-    cells.push(
-      <span
-        key={i}
-        aria-hidden
-        className={cn(
-          'rounded-[1px]',
-          isDone ? 'pf-patch-cell bg-primary/80 shadow-[0_0_4px] shadow-primary/40' : 'bg-foreground/10'
-        )}
-      />
-    );
-  }
-  return (
-    <div
-      className="pointer-events-none absolute inset-1.5 grid gap-[2px] p-0"
-      style={{
-        gridTemplateColumns: `repeat(${sampled.cols}, minmax(0,1fr))`,
-        gridTemplateRows: `repeat(${sampled.rows}, minmax(0,1fr))`,
-      }}
-    >
-      {cells}
-    </div>
-  );
-}
-
 function ZipToggle({ item, className }: { item: QueueItem; className?: string }) {
   const toggleZip = useStore((s) => s.toggleZip);
   const included = item.zip !== false;
   return (
     <label
       className={cn(
-        'inline-flex cursor-pointer items-center gap-1.5 rounded-md bg-background/80 px-1.5 py-1 backdrop-blur-sm',
+        'inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background/90 px-1.5 py-1',
         className
       )}
       title={included ? 'Included in ZIP export' : 'Excluded from ZIP export'}
@@ -181,7 +141,7 @@ function ItemActions({ item }: { item: QueueItem }) {
                   <Eye className="h-4 w-4" aria-hidden />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Compare before / after</TooltipContent>
+              <TooltipContent>Compare before and after</TooltipContent>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -236,13 +196,13 @@ function ItemActions({ item }: { item: QueueItem }) {
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8"
-                aria-label={`Re-upscale ${item.name} with current settings`}
+                aria-label={`Process ${item.name} again with current settings`}
                 onClick={() => retry(item.id)}
               >
                 <RefreshCw className="h-4 w-4" aria-hidden />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Re-upscale with current settings</TooltipContent>
+            <TooltipContent>Process again with current settings</TooltipContent>
           </Tooltip>
         </TooltipProvider>
       )}
@@ -275,8 +235,8 @@ function ItemActions({ item }: { item: QueueItem }) {
 function buildMeta(item: QueueItem): string {
   const r = item.result;
   const meta: string[] = [];
-  if (item.w) meta.push(`${item.w}×${item.h}`);
-  if (r) meta.push(`→ ${r.w}×${r.h}`);
+  if (item.w) meta.push(`${item.w}x${item.h}`);
+  if (r) meta.push(`→ ${r.w}x${r.h}`);
   if (item.sizeIn) meta.push(formatBytes(item.sizeIn));
   if (r && r.size > 0) meta.push(`→ ${formatBytes(r.size)}`);
   if (r && r.ms > 0) meta.push(formatDuration(r.ms));
@@ -291,40 +251,39 @@ function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
     <li
       style={{ ['--i' as string]: index }}
       className={cn(
-        'pf-rise group flex items-center gap-3 rounded-xl border bg-card/60 p-3 transition-all duration-200 hover:-translate-y-px hover:border-primary/40 hover:bg-card hover:shadow-md',
-        item.status === 'processing' && 'border-primary/40 bg-primary/5 shadow-[0_0_24px_-12px] shadow-primary/50',
-        item.status === 'error' && 'border-red-500/30',
+        'pf-rise group flex items-center gap-3 rounded-lg border bg-card p-3 transition-all duration-200 hover:border-primary/40 hover:shadow-sm',
+        item.status === 'processing' && 'border-primary/40 bg-primary/5',
+        item.status === 'error' && 'border-red-600/30',
         excluded && 'opacity-55'
       )}
     >
       {/* ZIP selection for finished items */}
       {item.status === 'done' && <ZipToggle item={item} />}
 
-      {/* thumbnail + progress ring + patch mosaic */}
+      {/* thumbnail + progress ring */}
       <div className="relative h-14 w-14 shrink-0">
-        <div className="h-full w-full overflow-hidden rounded-lg border bg-muted/40">
-        {item.thumbUrl ? (
-          <img
+        <div className="h-full w-full overflow-hidden rounded-md border bg-muted">
+          {item.thumbUrl ? (
+            <img
               src={item.thumbUrl}
               alt=""
               className={cn(
-                'h-full w-full object-cover transition-all duration-500',
-                item.status === 'processing' && 'scale-105 blur-[1px] brightness-90'
+                'h-full w-full object-cover transition-all duration-300',
+                item.status === 'processing' && 'opacity-80'
               )}
             />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center text-muted-foreground">
-            <X className="h-4 w-4" aria-hidden />
-          </div>
-        )}
-          {item.status === 'processing' && item.patch && <PatchGrid patch={item.patch} />}
+          ) : (
+            <div className="flex h-full w-full items-center justify-center text-muted-foreground">
+              <X className="h-4 w-4" aria-hidden />
+            </div>
+          )}
           {r && (
             <span className="absolute bottom-0 right-0 flex">
               <span className="bg-black/60 px-1 py-px font-mono text-[9px] font-semibold text-white">
                 {r.format.toUpperCase()}
               </span>
               <span className="bg-primary px-1 py-px font-mono text-[9px] font-semibold text-primary-foreground">
-                {r.target ? `${r.target}px` : `${r.scale}×`}
+                {r.target ? `${r.target}px` : `${r.scale}x`}
               </span>
             </span>
           )}
@@ -338,20 +297,6 @@ function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
           <p className="truncate text-sm font-medium" title={item.name}>
             {item.name}
           </p>
-          {item.restored && (
-            <TooltipProvider delayDuration={200}>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="shrink-0 text-muted-foreground/70" aria-label="Restored from your last session">
-                    <History className="h-3.5 w-3.5" aria-hidden />
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent className="max-w-56">
-                  Restored from your last session — the original file isn&apos;t kept, so re-upscaling needs a fresh drop.
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          )}
           <StatusChip item={item} />
         </div>
 
@@ -372,7 +317,9 @@ function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
           </div>
         )}
         {item.status === 'error' && item.error && (
-          <p className="mt-0.5 truncate text-[11px] text-red-500">{item.error}</p>
+          <p className="mt-0.5 truncate text-[11px] text-red-600 dark:text-red-400" title={item.error}>
+            {item.error}
+          </p>
         )}
       </div>
 
@@ -389,38 +336,36 @@ function QueueCard({ item, index }: { item: QueueItem; index: number }) {
     <li
       style={{ ['--i' as string]: Math.min(index, 11) }}
       className={cn(
-        'pf-rise group flex flex-col gap-2 rounded-xl border bg-card/60 p-2.5 transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/40 hover:bg-card hover:shadow-md',
-        item.status === 'processing' && 'border-primary/40 bg-primary/5 shadow-[0_0_24px_-12px] shadow-primary/50',
-        item.status === 'error' && 'border-red-500/30',
+        'pf-rise group flex flex-col gap-2 rounded-lg border bg-card p-2.5 transition-all duration-200 hover:border-primary/40 hover:shadow-sm',
+        item.status === 'processing' && 'border-primary/40 bg-primary/5',
+        item.status === 'error' && 'border-red-600/30',
         excluded && 'opacity-55'
       )}
     >
       {/* thumbnail stage */}
-      <div className="relative aspect-square w-full overflow-hidden rounded-lg border bg-muted/40 bg-[repeating-conic-gradient(var(--border)_0%_25%,transparent_0%_50%)] bg-[length:12px_12px]">
+      <div className="relative aspect-square w-full overflow-hidden rounded-md border bg-muted bg-[repeating-conic-gradient(var(--border)_0%_25%,transparent_0%_50%)] bg-[length:12px_12px]">
         {item.thumbUrl ? (
           <img
             src={item.thumbUrl}
             alt=""
             className={cn(
-              'h-full w-full object-contain p-1 transition-all duration-500',
-              item.status === 'processing' && 'scale-105 blur-[1px] brightness-90'
+              'h-full w-full object-contain p-1 transition-all duration-300',
+              item.status === 'processing' && 'opacity-80'
             )}
           />
         ) : (
-          <div className="flex h-full w-full items-center justify-center bg-background/60 text-muted-foreground">
+          <div className="flex h-full w-full items-center justify-center text-muted-foreground">
             <X className="h-5 w-5" aria-hidden />
           </div>
         )}
 
-        {item.status === 'processing' && item.patch && <PatchGrid patch={item.patch} />}
-
         {/* badges */}
         {r && (
-          <span className="absolute left-1.5 top-1.5 flex items-center gap-1">
-            <span className="rounded-md bg-primary px-1.5 py-px font-mono text-[9px] font-semibold text-primary-foreground shadow-sm">
-              {r.target ? `${r.target}px` : `${r.scale}×`}
+          <span className="absolute left-1.5 top-1.5 flex flex-nowrap items-center gap-1 whitespace-nowrap">
+            <span className="shrink-0 rounded-sm bg-primary px-1.5 py-px font-mono text-[9px] font-semibold text-primary-foreground">
+              {r.target ? `${r.target}px` : `${r.scale}x`}
             </span>
-            <span className="rounded-md bg-black/60 px-1 py-px font-mono text-[9px] font-semibold text-white backdrop-blur-sm">
+            <span className="shrink-0 rounded-sm bg-black/60 px-1 py-px font-mono text-[9px] font-semibold text-white">
               {r.format.toUpperCase()}
             </span>
           </span>
@@ -438,7 +383,7 @@ function QueueCard({ item, index }: { item: QueueItem; index: number }) {
 
         {/* centered progress ring while processing */}
         {item.status === 'processing' && (
-          <div className="absolute inset-0 flex items-center justify-center bg-background/30 backdrop-blur-[1px]">
+          <div className="absolute inset-0 flex items-center justify-center bg-background/40">
             <div className="relative h-12 w-12">
               <ProgressRing progress={item.progress} />
               <span className="absolute inset-0 flex items-center justify-center font-mono text-[10px] font-semibold tabular-nums text-foreground">
@@ -463,9 +408,8 @@ function QueueCard({ item, index }: { item: QueueItem; index: number }) {
 
       {/* info */}
       <div className="min-w-0 space-y-0.5 px-0.5">
-        <p className="flex items-center gap-1 truncate text-xs font-medium" title={item.name}>
-          {item.restored && <History className="h-3 w-3 shrink-0 text-muted-foreground/70" aria-hidden />}
-          <span className="truncate">{item.name}</span>
+        <p className="truncate text-xs font-medium" title={item.name}>
+          {item.name}
         </p>
         <p className="truncate text-[10px] text-muted-foreground tabular-nums">
           {buildMeta(item) || item.mime}
@@ -480,13 +424,13 @@ function QueueCard({ item, index }: { item: QueueItem; index: number }) {
           </div>
         )}
         {item.status === 'error' && item.error && (
-          <p className="truncate text-[10px] text-red-500" title={item.error}>
+          <p className="truncate text-[10px] text-red-600 dark:text-red-400" title={item.error}>
             {item.error}
           </p>
         )}
       </div>
 
-      <div className="-mx-0.5 flex justify-end border-t border-border/50 pt-1.5">
+      <div className="-mx-0.5 flex justify-end border-t border-border pt-1.5">
         <ItemActions item={item} />
       </div>
     </li>
@@ -500,8 +444,6 @@ export function Queue() {
   const togglePause = useStore((s) => s.togglePause);
   const clearFinished = useStore((s) => s.clearFinished);
   const clearAll = useStore((s) => s.clearAll);
-  const backend = useStore((s) => s.backend);
-  const gpu = useStore((s) => s.gpu);
   const totals = useStore((s) => s.totals);
   const settings = useStore((s) => s.settings);
   const setSettings = useStore((s) => s.setSettings);
@@ -512,24 +454,25 @@ export function Queue() {
   const zipCount = items.filter((i) => i.status === 'done' && i.result && i.zip !== false).length;
   const active = items.find((i) => i.status === 'processing');
   const overall =
-    items.length === 0
-      ? 0
-      : (doneCount + (active ? active.progress : 0)) / items.length;
+    items.length === 0 ? 0 : (doneCount + (active ? active.progress : 0)) / items.length;
 
   const hasDone = doneCount > 0;
   const hasQueued = queuedCount > 0;
 
-  // rough ETA from the session average — only meaningful once ≥1 image finished
+  // rough ETA from the session average, meaningful once one image finished
   const avgMs = totals.images > 0 ? totals.ms / totals.images : 0;
-  const eta = busy && !paused && hasQueued && avgMs > 0 ? avgMs * (queuedCount + (active ? 1 - active.progress : 0)) : 0;
+  const eta =
+    busy && !paused && hasQueued && avgMs > 0
+      ? avgMs * (queuedCount + (active ? 1 - active.progress : 0))
+      : 0;
 
   return (
     <div className="space-y-3">
       {/* batch bar */}
       <div
         className={cn(
-          'rounded-xl border bg-card/60 p-3 transition-colors',
-          paused && busy && 'border-amber-500/40 bg-amber-500/5'
+          'rounded-lg border bg-card p-3 transition-colors',
+          paused && busy && 'border-amber-600/40 bg-amber-500/5'
         )}
       >
         <div className="flex flex-wrap items-center gap-2">
@@ -541,13 +484,7 @@ export function Queue() {
               </Button>
             )}
             {paused && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-8 gap-1.5"
-                onClick={togglePause}
-                disabled={!hasQueued}
-              >
+              <Button size="sm" variant="outline" className="h-8 gap-1.5" onClick={togglePause} disabled={!hasQueued}>
                 <Play className="h-3.5 w-3.5" aria-hidden />
                 Resume
               </Button>
@@ -575,10 +512,21 @@ export function Queue() {
                 )}
               </Tooltip>
             </TooltipProvider>
-            <Button size="sm" variant="ghost" className="h-8" onClick={clearFinished} disabled={!items.some((i) => i.status !== 'queued' && i.status !== 'processing')}>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-8"
+              onClick={clearFinished}
+              disabled={!items.some((i) => i.status !== 'queued' && i.status !== 'processing')}
+            >
               Clear finished
             </Button>
-            <Button size="sm" variant="ghost" className="h-8 text-muted-foreground hover:text-destructive" onClick={clearAll}>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-8 text-muted-foreground hover:text-destructive"
+              onClick={clearAll}
+            >
               <Trash2 className="h-3.5 w-3.5" aria-hidden />
               Clear all
             </Button>
@@ -595,16 +543,10 @@ export function Queue() {
                 ~{formatDuration(eta)} left
               </Badge>
             )}
-            {backend && (
-              <Badge
-                variant="outline"
-                className="gap-1 font-mono text-[10px] text-muted-foreground"
-                title={gpu ? `GPU: ${gpu}` : undefined}
-              >
-                <Cpu className="h-3 w-3" aria-hidden />
-                {backend === 'webgl' ? 'WebGL' : backend.toUpperCase()}
-              </Badge>
-            )}
+            <Badge variant="outline" className="gap-1 font-mono text-[10px] text-muted-foreground">
+              <Cloud className="h-3 w-3" aria-hidden />
+              Cloud
+            </Badge>
             <Badge variant="outline" className="font-mono text-[10px] tabular-nums text-muted-foreground">
               {doneCount}/{items.length} done
               {totals.ms > 0 && ` · ${formatDuration(totals.ms)} total`}
@@ -627,7 +569,7 @@ export function Queue() {
                   <TooltipContent>Keyboard shortcuts</TooltipContent>
                 </Tooltip>
               </TooltipProvider>
-              <div className="flex items-center rounded-lg border p-0.5" role="group" aria-label="Queue layout">
+              <div className="flex items-center rounded-md border p-0.5" role="group" aria-label="Queue layout">
                 <button
                   type="button"
                   aria-label="List view"
@@ -635,7 +577,7 @@ export function Queue() {
                   title="List view (V)"
                   onClick={() => setSettings({ queueView: 'list' })}
                   className={cn(
-                    'flex h-7 w-8 items-center justify-center rounded-md transition-colors',
+                    'flex h-7 w-8 items-center justify-center rounded-sm transition-colors',
                     view === 'list' ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                   )}
                 >
@@ -648,7 +590,7 @@ export function Queue() {
                   title="Grid view (V)"
                   onClick={() => setSettings({ queueView: 'grid' })}
                   className={cn(
-                    'flex h-7 w-8 items-center justify-center rounded-md transition-colors',
+                    'flex h-7 w-8 items-center justify-center rounded-sm transition-colors',
                     view === 'grid' ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                   )}
                 >
@@ -666,21 +608,21 @@ export function Queue() {
           </span>
         </div>
         {paused && busy && (
-          <p className="mt-1.5 text-[11px] text-amber-500">
-            Paused — the current image will finish, queued ones wait.
+          <p className="mt-1.5 text-[11px] text-amber-600 dark:text-amber-400">
+            Paused. The current image will finish, queued ones wait.
           </p>
         )}
       </div>
 
       {/* items */}
       {view === 'list' ? (
-        <ul className="max-h-[52vh] space-y-2 overflow-y-auto pr-1 fancy-scroll" role="list">
+        <ul className="fancy-scroll max-h-[52vh] space-y-2 overflow-y-auto pr-1" role="list">
           {items.map((item, i) => (
             <QueueItemRow key={item.id} item={item} index={i} />
           ))}
         </ul>
       ) : (
-        <ul className="max-h-[58vh] grid grid-cols-2 gap-2.5 overflow-y-auto pr-1 fancy-scroll sm:grid-cols-3 xl:grid-cols-4" role="list">
+        <ul className="fancy-scroll grid max-h-[58vh] grid-cols-2 gap-2.5 overflow-y-auto pr-1 sm:grid-cols-3 xl:grid-cols-4" role="list">
           {items.map((item, i) => (
             <QueueCard key={item.id} item={item} index={i} />
           ))}

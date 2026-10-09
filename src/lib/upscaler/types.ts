@@ -1,71 +1,64 @@
-/** Structural subset of UpscalerJS ModelDefinition (v1.0.x). */
-export interface ModelDefinition {
-  scale?: number;
-  modelType?: 'layers' | 'graph';
-  path?: string;
-  _internals?: { path: string; name: string; version: string };
-  setup?: (tf: unknown) => void | Promise<void>;
-  meta?: Record<string, unknown>;
-}
+/** Shared types for the PixelForge client. Processing happens server side. */
 
 export type PresetId = 'fast' | 'balanced' | 'studio';
 export type ScaleFactor = 2 | 3 | 4 | 8;
 export type OutputFormat = 'jpeg' | 'png' | 'webp';
 export type FormatChoice = OutputFormat | 'auto';
-/** how the output size is chosen: fixed AI multiplier or a target longest side */
+/** how the output size is chosen: fixed multiplier or a target longest side */
 export type ScaleMode = 'factor' | 'target';
 
-export interface PresetMeta {
-  id: PresetId;
-  label: string;
-  model: string;
-  sizeMB: number;
-  desc: string;
-  speed: 1 | 2 | 3; // 3 = fastest
-  quality: 1 | 2 | 3; // 3 = best
-}
-
-export interface WorkerRequest {
-  type: 'upscale';
-  id: string;
-  bitmap: ImageBitmap;
+export interface Settings {
   scale: ScaleFactor;
-  preset: PresetId;
-  format: OutputFormat;
-  quality: number;
-  /** 0 = off, 1 = light median pre-pass, 2 = strong (two passes) */
+  scaleMode: ScaleMode;
+  /** target longest side in px (target mode) */
+  targetSide: number;
+  format: FormatChoice;
+  /** encoder quality for jpeg / webp (0.5..1) */
+  jpegQuality: number;
+  /** 0 = off, 1 = light median, 2 = strong median */
   denoise: 0 | 1 | 2;
-  /** unsharp-mask post-pass on the upscaled output */
+  /** unsharp mask after upscaling */
   sharpen: boolean;
-  /** original JPEG APP1 EXIF segment — copied into JPEG outputs when opted in */
-  exif?: ArrayBuffer;
-  /** target-mode: resize the output so its longest side is exactly this (px) */
-  targetSide?: number;
-  /** force a specific tfjs backend (used by the stall watchdog to retry on CPU) */
-  backendHint?: 'webgl' | 'cpu';
+  /** keep camera metadata in JPEG outputs */
+  keepExif: boolean;
+  queueView: 'list' | 'grid';
+  compareMode: 'slider' | 'side';
+  compareZoom: number;
 }
 
-export type WorkerInMessage =
-  | { type: 'init'; origin: string }
-  | WorkerRequest
-  | { type: 'cancel'; id: string };
+export interface ResultData {
+  url: string;
+  size: number;
+  w: number;
+  h: number;
+  ms: number;
+  scale: ScaleFactor;
+  format: OutputFormat;
+  clamped: boolean;
+  /** target mode: exact longest side the output was sized to */
+  target?: number;
+}
 
-export type ModelStatus = 'loading' | 'ready' | 'error';
-
-export type WorkerOutMessage =
-  | { type: 'backend'; backend: string; renderer?: string }
-  | { type: 'debug'; text: string }
-  | { type: 'phase'; id: string; phase: string }
-  | { type: 'model-status'; preset: PresetId; scale: ScaleFactor; status: ModelStatus; message?: string }
-  | { type: 'progress'; id: string; rate: number }
-  | {
-      type: 'patch';
-      id: string;
-      /** completed patch indices, row-major */
-      row: number;
-      col: number;
-      cols: number;
-      rows: number;
-    }
-  | { type: 'done'; id: string; blob: Blob; width: number; height: number; ms: number }
-  | { type: 'error'; id: string; message: string };
+export interface QueueItem {
+  id: string;
+  /** null for items restored from a previous session (original is not kept) */
+  file: File | null;
+  name: string;
+  mime: string;
+  sizeIn: number;
+  w: number;
+  h: number;
+  thumbUrl: string;
+  originalUrl: string;
+  status: 'queued' | 'processing' | 'done' | 'error' | 'canceled';
+  progress: number; // 0..1
+  phase: string;
+  error?: string;
+  result?: ResultData;
+  /** include in ZIP export (default true) */
+  zip?: boolean;
+  /** restored from a previous session (original file is gone) */
+  restored?: boolean;
+  /** true when the input was re-encoded before upload to fit the size cap */
+  optimized?: boolean;
+}

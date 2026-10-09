@@ -1,6 +1,6 @@
 'use client';
 
-import type { OutputFormat, PresetId, ScaleFactor } from './types';
+import type { OutputFormat, ScaleFactor } from './types';
 
 /**
  * IndexedDB session-persistence for finished results — lets completed
@@ -40,7 +40,6 @@ export interface PersistedResult {
     h: number;
     ms: number;
     scale: ScaleFactor;
-    preset: PresetId;
     format: OutputFormat;
     clamped: boolean;
     /** target-mode: exact longest side the output was sized to */

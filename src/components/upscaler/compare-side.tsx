@@ -217,7 +217,7 @@ export function CompareSideBySide({
         ref={wrapRef}
         role="group"
         tabIndex={0}
-        aria-label="Side-by-side comparison — both views share zoom and pan; scroll to zoom toward the cursor, drag to pan"
+        aria-label="Side-by-side comparison. Both views share zoom and pan, scroll to zoom toward the cursor, drag to pan"
         onKeyDown={onKeyDown}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}

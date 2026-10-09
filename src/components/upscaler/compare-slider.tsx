@@ -272,7 +272,7 @@ export function CompareSlider({
         ref={containerRef}
         role="slider"
         tabIndex={0}
-        aria-label="Before and after comparison — arrow keys move the divider, plus and minus zoom"
+        aria-label="Before and after comparison. Arrow keys move the divider, plus and minus zoom"
         aria-valuenow={Math.round(pos)}
         aria-valuemin={0}
         aria-valuemax={100}

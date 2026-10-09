@@ -270,7 +270,7 @@ function drawText(): HTMLCanvasElement {
   ctx.fillText('THE DAILY PIXEL', 48, 88);
   ctx.font = '400 17px sans-serif';
   ctx.fillStyle = '#6b6b70';
-  ctx.fillText('Vol. 04 · Local AI Edition · Free forever', 48, 118);
+  ctx.fillText('Vol. 04 · Server Side Edition · Free forever', 48, 118);
 
   // rule
   ctx.fillStyle = '#1a1a1e';
@@ -279,17 +279,16 @@ function drawText(): HTMLCanvasElement {
   // headline + paragraph
   ctx.fillStyle = '#1a1a1e';
   ctx.font = '700 30px Georgia, serif';
-  ctx.fillText('Neural super-resolution, on your device', 48, 186);
+  ctx.fillText('Sharp upscales, powered by the server', 48, 186);
   ctx.font = '400 19px Georgia, serif';
   const lines = [
-    'Every pixel in this page was rendered in your browser and',
-    'then deliberately crushed to a fraction of its size. Upscale',
-    'it back with the Text-friendly engine and watch the letter-',
-    'forms snap into focus — no server ever sees this document.',
+    'This page was rendered once at full size and then deliberately',
+    'crushed to a fraction of its size. Upscale it back with the text',
+    'friendly pipeline and watch the letterforms snap into focus.',
     '',
-    'Receipt   2× Coffee ............. $4.00',
-    '          1× Domain ............. $0.00',
-    '          1× Cloud upload ....... $0.00',
+    'Receipt   2x Coffee ............. $4.00',
+    '          1x Domain ............. $0.00',
+    '          1x Cloud upload ....... $0.00',
     '          TOTAL ................. $4.00',
   ];
   lines.forEach((line, i) => ctx.fillText(line, 48, 226 + i * 30));
@@ -297,7 +296,7 @@ function drawText(): HTMLCanvasElement {
   // signature + date stamp
   ctx.font = 'italic 24px Georgia, serif';
   ctx.fillStyle = '#3a3a40';
-  ctx.fillText('— The PixelForge Team', 48, 540);
+  ctx.fillText('The PixelForge Team', 48, 540);
   ctx.save();
   ctx.translate(W - 210, 620);
   ctx.rotate(-0.08);

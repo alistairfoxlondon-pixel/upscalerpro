@@ -16,18 +16,15 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "PixelForge — Free Open-Source AI Image Upscaler (100% Local)",
+  title: "PixelForge: Free AI Image Upscaler",
   description:
-    "Upscale and enhance images up to 4× with AI super-resolution — ESRGAN models running entirely in your browser. No uploads, no accounts, no limits. Batch processing, JPEG/PNG/WebP output, HEIC/TIFF support.",
+    "Enlarge photos up to 8x with sharper detail. Fast server side processing, batch ZIP export, JPEG PNG and WebP output. Files are processed in memory and never stored.",
   keywords: [
     "image upscaler",
     "AI upscaling",
-    "ESRGAN",
-    "free image upscaler",
-    "browser AI",
-    "super resolution",
-    "enhance photo quality",
-    "open source",
+    "enlarge image",
+    "photo enhancer",
+    "upscale image online",
     "batch upscale",
   ],
   authors: [{ name: "PixelForge" }],
@@ -42,23 +39,23 @@ export const metadata: Metadata = {
     statusBarStyle: "black-translucent",
   },
   openGraph: {
-    title: "PixelForge — Free Open-Source AI Image Upscaler",
+    title: "PixelForge: Free AI Image Upscaler",
     description:
-      "Fix blurry and pixelated images with on-device AI. 100% private: images never leave your browser.",
+      "Enlarge photos up to 8x with sharper detail. Files are processed in memory and never stored.",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "PixelForge — Free Open-Source AI Image Upscaler",
+    title: "PixelForge: Free AI Image Upscaler",
     description:
-      "Fix blurry and pixelated images with on-device AI. 100% private: images never leave your browser.",
+      "Enlarge photos up to 8x with sharper detail. Files are processed in memory and never stored.",
   },
 };
 
 export const viewport: Viewport = {
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#fafaf9" },
-    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#131313" },
   ],
 };
 

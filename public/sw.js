@@ -1,6 +1,5 @@
-/* PixelForge minimal service worker — offline-first for model weights. */
-const VERSION = 'pf-v1';
-const MODEL_CACHE = `${VERSION}-models`;
+/* PixelForge minimal service worker: static assets only. */
+const VERSION = 'pf-v2';
 const ASSET_CACHE = `${VERSION}-assets`;
 const PAGE_CACHE = `${VERSION}-pages`;
 
@@ -28,20 +27,6 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
-
-  // AI model weights: cache-first (makes the app work fully offline)
-  if (url.pathname.startsWith('/models/')) {
-    event.respondWith(
-      caches.open(MODEL_CACHE).then(async (cache) => {
-        const hit = await cache.match(req);
-        if (hit) return hit;
-        const res = await fetch(req);
-        if (res.ok) cache.put(req, res.clone());
-        return res;
-      })
-    );
-    return;
-  }
 
   // hashed build assets: cache-first
   if (url.pathname.startsWith('/_next/static/') || url.pathname === '/icon.svg' || url.pathname.startsWith('/icon-')) {

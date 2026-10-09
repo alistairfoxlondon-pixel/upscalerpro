@@ -1,44 +1,16 @@
-import type { PresetId, PresetMeta, ScaleFactor } from './types';
-
-export const PRESETS: Record<PresetId, PresetMeta> = {
-  fast: {
-    id: 'fast',
-    label: 'Fast',
-    model: 'ESRGAN-Slim',
-    sizeMB: 1,
-    desc: 'Great all-round quality, quickest results.',
-    speed: 3,
-    quality: 1,
-  },
-  balanced: {
-    id: 'balanced',
-    label: 'Balanced',
-    model: 'ESRGAN-Medium',
-    sizeMB: 3,
-    desc: 'Noticeably finer detail on photos.',
-    speed: 2,
-    quality: 2,
-  },
-  studio: {
-    id: 'studio',
-    label: 'Studio',
-    model: 'ESRGAN-Thick',
-    sizeMB: 29,
-    desc: 'Maximum detail recovery. Slow — best for small images.',
-    speed: 1,
-    quality: 3,
-  },
-};
-
-export const PRESET_ORDER: PresetId[] = ['fast', 'balanced', 'studio'];
+import type { ScaleFactor, Settings } from './types';
 
 export const SCALES: ScaleFactor[] = [2, 3, 4, 8];
 
-/** Safety caps so a huge image can't blow up device memory. */
+/** Safety caps so one image can not produce an absurd output. */
 export const MAX_OUT_DIM = 8192;
 export const MAX_OUT_PIXELS = 34_000_000;
-export const MAX_INPUT_PIXELS = 40_000_000;
+export const MAX_INPUT_PIXELS = 30_000_000;
+export const MAX_INPUT_SIDE = 8192;
 export const MAX_BATCH_FILES = 50;
+
+/** Upload budget: the target platform accepts about 4.5 MB per request. */
+export const MAX_UPLOAD_BYTES = 4.2 * 1024 * 1024;
 
 export function resolveFormat(mime: string, name: string): 'jpeg' | 'png' | 'webp' {
   const m = (mime || '').toLowerCase();
@@ -54,39 +26,33 @@ export function extForFormat(f: 'jpeg' | 'png' | 'webp'): string {
   return f === 'jpeg' ? 'jpg' : f;
 }
 
-/* ------------------------- target-size scale mode ------------------------- */
+/* ------------------------- target presets ------------------------- */
 
-/** Quick-pick longest-side targets (labelled in the settings panel). */
+/** Quick pick longest side targets. */
 export const TARGET_PRESETS: { side: number; label: string }[] = [
   { side: 1280, label: 'HD' },
   { side: 1920, label: 'FHD' },
   { side: 2560, label: '2K' },
   { side: 3840, label: '4K' },
 ];
-/** Bounds for the custom target input. */
 export const TARGET_MIN = 320;
 export const TARGET_MAX = 8192;
 
-export interface SizeFit {
+export interface SizePlan {
+  /** AI style scale used for the badge / filename */
   scale: ScaleFactor;
-  /** final output dimensions (exact target in target mode) */
   outW: number;
   outH: number;
-  /** memory-cap clamp was applied (factor mode only) */
+  /** factor mode: requested scale exceeded the caps and was reduced */
   clamped?: boolean;
-  /** required factor exceeded 8× — output lands at 8× instead of the target */
+  /** target mode: caps forced a smaller result than the target */
   short?: boolean;
-  /** human-readable reason when the target is unreachable */
+  /** human readable reason when the request can not be satisfied */
   error?: string;
 }
 
-/**
- * Factor mode: pick the largest scale that is <= requested and within memory
- * caps. 8× runs as a chained 4×→2× pass in the worker; the memory math is the
- * same as a plain 8× (64× more pixels), so the caps below guard both cases.
- * Returns null when not even 2x is possible.
- */
-export function resolveScale(w: number, h: number, requested: ScaleFactor): SizeFit | null {
+/** Factor mode: largest scale that is <= requested and inside the caps. */
+export function planFactor(w: number, h: number, requested: ScaleFactor): SizePlan | null {
   for (const s of [requested, 4, 3, 2] as ScaleFactor[]) {
     if (s > requested) continue;
     const ow = w * s;
@@ -99,12 +65,10 @@ export function resolveScale(w: number, h: number, requested: ScaleFactor): Size
 }
 
 /**
- * Target mode: reach an exact longest-side size. The smallest AI scale that
- * meets the target is used (2× minimum — there is no 1× model), then the
- * worker resizes the AI output down to the exact target, so the AI always
- * works at or above the requested resolution (never interpolated up).
+ * Target mode: exact longest side. Targets above the original size upscale,
+ * smaller targets downscale. Both are handled server side in one pass.
  */
-export function resolveScaleForTarget(w: number, h: number, targetSide: number): SizeFit {
+export function planTarget(w: number, h: number, targetSide: number): SizePlan {
   const longest = Math.max(w, h);
   if (!Number.isFinite(targetSide) || targetSide < TARGET_MIN) {
     return { scale: 2, outW: w * 2, outH: h * 2, error: 'Target size is too small' };
@@ -113,36 +77,23 @@ export function resolveScaleForTarget(w: number, h: number, targetSide: number):
     return { scale: 2, outW: w * 2, outH: h * 2, error: `Target size is capped at ${MAX_OUT_DIM} px` };
   }
   if (targetSide <= longest) {
-    return { scale: 2, outW: w * 2, outH: h * 2, error: 'Target must be larger than the original image' };
+    // downscale: pure high quality resize, report the effective factor
+    const k = targetSide / longest;
+    const s = (Math.max(1, Math.round(k)) || 1) as ScaleFactor;
+    return { scale: s, outW: Math.max(1, Math.round(w * k)), outH: Math.max(1, Math.round(h * k)) };
   }
   const required = targetSide / longest;
-  let scale: ScaleFactor | null = null;
-  for (const s of [2, 3, 4, 8] as ScaleFactor[]) {
-    if (s >= required) {
-      scale = s;
-      break;
-    }
-  }
-  const short = scale === null;
-  const fit: ScaleFactor = (scale ?? 8) as ScaleFactor;
+  const fit = (required <= 2 ? 2 : required <= 3 ? 3 : required <= 4 ? 4 : 8) as ScaleFactor;
   const reaches = (s: ScaleFactor) =>
     w * s <= MAX_OUT_DIM && h * s <= MAX_OUT_DIM && w * s * h * s <= MAX_OUT_PIXELS;
   if (!reaches(fit)) {
-    // The smallest scale that meets the target busts the memory caps —
-    // land short at the largest scale that fits rather than failing outright.
     const shortScale = ([4, 3, 2] as ScaleFactor[]).find((s) => s < fit && reaches(s));
     if (!shortScale) {
-      return {
-        scale: 2,
-        outW: w * 2,
-        outH: h * 2,
-        error: 'Image is too large to upscale on this device',
-      };
+      return { scale: 2, outW: w * 2, outH: h * 2, error: 'Image is too large to upscale' };
     }
     return { scale: shortScale, outW: w * shortScale, outH: h * shortScale, short: true };
   }
-  if (short) {
-    // requested factor beyond 8× — land at 8× (worker skips the resize)
+  if (required > 8) {
     return { scale: 8, outW: w * 8, outH: h * 8, short: true };
   }
   const k = targetSide / longest;
@@ -151,4 +102,11 @@ export function resolveScaleForTarget(w: number, h: number, targetSide: number):
     outW: Math.max(1, Math.round(w * k)),
     outH: Math.max(1, Math.round(h * k)),
   };
+}
+
+/** Resolve the output plan for current settings. */
+export function planOutput(w: number, h: number, settings: Pick<Settings, 'scaleMode' | 'scale' | 'targetSide'>): SizePlan | null {
+  return settings.scaleMode === 'target'
+    ? planTarget(w, h, settings.targetSide)
+    : planFactor(w, h, settings.scale);
 }

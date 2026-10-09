@@ -66,7 +66,7 @@ export function Workspace() {
             const { toast } = await import('sonner');
             toast.success(
               restored === 1 ? 'Restored 1 result' : `Restored ${restored} results`,
-              { description: 'From your last visit — everything stayed on this device.' }
+              { description: 'From your last visit, kept in this browser.' }
             );
           }
         } catch {
@@ -76,7 +76,7 @@ export function Workspace() {
       .catch(() => undefined);
   }, []);
 
-  // guard against closing the tab mid-job (results are local-only)
+  // guard against closing the tab mid-job
   React.useEffect(() => {
     if (!busy) return;
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -96,15 +96,15 @@ export function Workspace() {
       className="mx-auto w-full max-w-6xl scroll-mt-20 px-4 pb-16"
       aria-label="Upscaler workspace"
     >
-      <div className="grid items-start gap-6 lg:grid-cols-[340px_minmax(0,1fr)]">
+      <div className="grid items-start gap-5 lg:grid-cols-[340px_minmax(0,1fr)]">
         <div className="min-w-0 space-y-4 lg:sticky lg:top-20">
           <SettingsPanel />
           {totals.images > 0 && (
-            <div className="rounded-xl border bg-card/60 p-4 text-xs text-muted-foreground shadow-sm">
+            <div className="rounded-lg bg-secondary p-4 text-xs text-secondary-foreground">
               <p className="mb-2.5 flex items-center justify-between text-sm font-semibold text-foreground">
                 Session
-                <span className="rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-primary">
-                  local only
+                <span className="rounded-sm bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-primary">
+                  nothing stored
                 </span>
               </p>
               <dl className="grid grid-cols-2 gap-x-3 gap-y-2 tabular-nums">
@@ -125,9 +125,6 @@ export function Workspace() {
                   {formatDuration(totals.ms / Math.max(1, totals.images))}
                 </dd>
               </dl>
-              <p className="mt-2.5 border-t border-border/50 pt-2 text-[10px] leading-relaxed text-muted-foreground/80">
-                Finished results are kept in this browser and restored on your next visit.
-              </p>
             </div>
           )}
         </div>

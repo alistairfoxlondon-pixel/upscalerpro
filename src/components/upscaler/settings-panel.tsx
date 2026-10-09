@@ -1,20 +1,16 @@
 'use client';
 
 import * as React from 'react';
-import { Zap, Gauge, Crown, AlertTriangle, Check, Wand2, Sparkles, Camera, Ratio, Ruler } from 'lucide-react';
+import { AlertTriangle, Camera, Check, Ratio, Ruler, Sparkles, Wand2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
-import { PRESETS, PRESET_ORDER, SCALES, TARGET_PRESETS, TARGET_MIN, TARGET_MAX } from '@/lib/upscaler/registry';
+import { SCALES, TARGET_MAX, TARGET_MIN, TARGET_PRESETS } from '@/lib/upscaler/registry';
 import { useStore } from '@/lib/upscaler/store';
-import type { FormatChoice, PresetId, ScaleFactor } from '@/lib/upscaler/types';
+import type { FormatChoice, ScaleFactor } from '@/lib/upscaler/types';
 import { cn } from '@/lib/utils';
-
-const speedDots = (n: number) => [1, 2, 3].map((i) => (
-  <span key={i} className={cn('h-1.5 w-3 rounded-full', i <= n ? 'bg-primary' : 'bg-muted')} />
-));
 
 const FORMATS: { value: FormatChoice; label: string }[] = [
   { value: 'auto', label: 'Auto' },
@@ -23,28 +19,23 @@ const FORMATS: { value: FormatChoice; label: string }[] = [
   { value: 'webp', label: 'WebP' },
 ];
 
-/** numbered section label — gives the panel a scannable step rhythm */
-function SectionLabel({ n, children, right }: { n: number; children: React.ReactNode; right?: React.ReactNode }) {
+function SectionLabel({ n, children }: { n: number; children: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-2">
-      <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-        <span
-          aria-hidden
-          className="grid h-4 w-4 place-items-center rounded-full border border-border/80 bg-muted/60 font-mono text-[9px] font-bold text-muted-foreground"
-        >
-          {n}
-        </span>
-        {children}
+    <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+      <span
+        aria-hidden
+        className="grid h-4 w-4 place-items-center rounded-sm bg-secondary font-mono text-[9px] font-bold text-secondary-foreground"
+      >
+        {n}
       </span>
-      {right}
-    </div>
+      {children}
+    </span>
   );
 }
 
 export function SettingsPanel() {
   const settings = useStore((s) => s.settings);
   const setSettings = useStore((s) => s.setSettings);
-  const preset = PRESETS[settings.preset];
   const isTarget = settings.scaleMode === 'target';
   const targetValid = settings.targetSide >= TARGET_MIN && settings.targetSide <= TARGET_MAX;
 
@@ -57,96 +48,39 @@ export function SettingsPanel() {
     <Card className="shadow-sm">
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center justify-between text-sm font-semibold">
-          Upscale settings
+          Settings
           <Badge variant="outline" className="font-mono text-[10px] text-muted-foreground">
-            {preset.model}
+            {isTarget ? `${settings.targetSide}px` : `${settings.scale}x`}
           </Badge>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-5">
-        {/* Model preset */}
+        {/* Size */}
         <div className="space-y-2">
-          <SectionLabel n={1} right={<span className="text-[10px] text-muted-foreground">speed → quality</span>}>
-            AI engine
-          </SectionLabel>
+          <SectionLabel n={1}>Size</SectionLabel>
           <ToggleGroup
             type="single"
-            value={settings.preset}
-            onValueChange={(v) => v && setSettings({ preset: v as PresetId })}
-            className="w-full gap-2"
+            value={settings.scaleMode}
+            onValueChange={(v) => v && setSettings({ scaleMode: v as 'factor' | 'target' })}
+            className="w-full gap-1.5"
           >
-            {PRESET_ORDER.map((id) => {
-              const p = PRESETS[id];
-              const Icon = id === 'fast' ? Zap : id === 'balanced' ? Gauge : Crown;
-              return (
-                <ToggleGroupItem
-                  key={id}
-                  value={id}
-                  aria-label={`${p.label} — ${p.desc}`}
-                  className="group/preset h-auto flex-1 flex-col gap-1 rounded-lg border px-2 py-2.5 data-[state=on]:border-primary data-[state=on]:bg-primary/10"
-                >
-                  <Icon className="h-4 w-4" aria-hidden />
-                  <span className="text-xs font-medium">{p.label}</span>
-                  <span className="flex items-center gap-1">
-                    <span className="flex gap-0.5">{speedDots(p.speed)}</span>
-                    <span className="font-mono text-[8px] leading-none text-muted-foreground/70 group-data-[state=on]/preset:text-primary/70">
-                      ~{p.sizeMB}MB
-                    </span>
-                  </span>
-                </ToggleGroupItem>
-              );
-            })}
+            <ToggleGroupItem
+              value="factor"
+              aria-label="Multiply by a factor"
+              className="flex-1 rounded-md border text-xs data-[state=on]:border-primary data-[state=on]:bg-primary/10"
+            >
+              <Ratio className="mr-1 h-3.5 w-3.5" aria-hidden />
+              Factor
+            </ToggleGroupItem>
+            <ToggleGroupItem
+              value="target"
+              aria-label="Exact target size"
+              className="flex-1 rounded-md border text-xs data-[state=on]:border-primary data-[state=on]:bg-primary/10"
+            >
+              <Ruler className="mr-1 h-3.5 w-3.5" aria-hidden />
+              Target
+            </ToggleGroupItem>
           </ToggleGroup>
-          <p className="text-[11px] leading-snug text-muted-foreground">{preset.desc}</p>
-          {settings.preset === 'studio' && (
-            <p className="flex items-start gap-1.5 rounded-md bg-amber-500/10 px-2 py-1.5 text-[11px] leading-snug text-amber-600 dark:text-amber-400">
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
-              Downloads ~{preset.sizeMB} MB of weights and runs much slower — ideal for small images.
-            </p>
-          )}
-        </div>
-
-        {/* Size: factor multiplier or exact target side */}
-        <div className="space-y-2">
-          <SectionLabel
-            n={2}
-            right={
-              <div
-                role="group"
-                aria-label="Size mode"
-                className="flex items-center rounded-full border border-border/70 bg-muted/40 p-0.5"
-              >
-                <button
-                  type="button"
-                  aria-pressed={!isTarget}
-                  title="Multiply width & height by a fixed factor"
-                  onClick={() => setSettings({ scaleMode: 'factor' })}
-                  className={cn(
-                    'flex h-5 items-center gap-1 rounded-full px-2 text-[10px] font-medium transition-colors',
-                    !isTarget ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
-                  )}
-                >
-                  <Ratio className="h-3 w-3" aria-hidden />
-                  Factor
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={isTarget}
-                  title="Reach an exact longest-side size"
-                  onClick={() => setSettings({ scaleMode: 'target' })}
-                  className={cn(
-                    'flex h-5 items-center gap-1 rounded-full px-2 text-[10px] font-medium transition-colors',
-                    isTarget ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
-                  )}
-                >
-                  <Ruler className="h-3 w-3" aria-hidden />
-                  Target
-                </button>
-              </div>
-            }
-          >
-            Output size
-          </SectionLabel>
 
           {isTarget ? (
             <>
@@ -160,45 +94,47 @@ export function SettingsPanel() {
                   <ToggleGroupItem
                     key={t.side}
                     value={String(t.side)}
-                    aria-label={`Target ${t.label} — longest side ${t.side} pixels`}
-                    className="flex-1 flex-col gap-0 rounded-lg border px-1 py-1.5 data-[state=on]:border-primary data-[state=on]:bg-primary/10"
+                    aria-label={`Target ${t.label}, ${t.side} pixels`}
+                    className="flex-1 flex-col gap-0 rounded-md border px-1 py-1.5 data-[state=on]:border-primary data-[state=on]:bg-primary/10"
                   >
                     <span className="font-mono text-xs leading-tight">{t.side}px</span>
-                    <span className="text-[8px] font-semibold uppercase tracking-wide text-muted-foreground/70 group-data-[state=on]:text-primary/70">
+                    <span className="text-[8px] font-semibold uppercase tracking-wide text-muted-foreground">
                       {t.label}
                     </span>
                   </ToggleGroupItem>
                 ))}
               </ToggleGroup>
-              <div className="flex items-center gap-2">
-                <div
-                  className={cn(
-                    'flex h-8 flex-1 items-center rounded-lg border bg-background/60 pl-2.5 transition-colors focus-within:ring-2 focus-within:ring-primary/50',
-                    targetValid ? 'border-border/80' : 'border-red-500/60'
-                  )}
-                >
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    min={TARGET_MIN}
-                    max={TARGET_MAX}
-                    step={80}
-                    value={settings.targetSide}
-                    aria-label="Custom target size, longest side in pixels"
-                    onChange={(e) => {
-                      const v = Number(e.target.value);
-                      if (Number.isFinite(v)) setSettings({ targetSide: Math.min(TARGET_MAX, Math.max(0, Math.round(v))) });
-                    }}
-                    onBlur={(e) => commitTarget(Number(e.target.value))}
-                    className="h-full w-full bg-transparent font-mono text-sm tabular-nums outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                  />
-                  <span className="pr-2.5 font-mono text-[10px] text-muted-foreground">px side</span>
-                </div>
+              <div
+                className={cn(
+                  'flex h-8 items-center rounded-md border bg-background pl-2.5 transition-colors focus-within:ring-2 focus-within:ring-primary/50',
+                  targetValid ? 'border-border' : 'border-destructive'
+                )}
+              >
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min={TARGET_MIN}
+                  max={TARGET_MAX}
+                  step={80}
+                  value={settings.targetSide}
+                  aria-label="Custom target size, longest side in pixels"
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    if (Number.isFinite(v)) setSettings({ targetSide: Math.min(TARGET_MAX, Math.max(0, Math.round(v))) });
+                  }}
+                  onBlur={(e) => commitTarget(Number(e.target.value))}
+                  className="h-full w-full bg-transparent font-mono text-sm tabular-nums outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                />
+                <span className="pr-2.5 font-mono text-[10px] text-muted-foreground">px side</span>
               </div>
-              <p className="text-[11px] leading-snug text-muted-foreground">
-                {targetValid
-                  ? 'Longest side lands exactly here — the AI scale is picked automatically per image, then fine-tuned with a high-quality resize.'
-                  : `Pick a value between ${TARGET_MIN} and ${TARGET_MAX} px.`}
+              {!targetValid && (
+                <p className="flex items-center gap-1.5 text-[11px] text-destructive">
+                  <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden />
+                  Pick {TARGET_MIN} to {TARGET_MAX} px.
+                </p>
+              )}
+              <p className="text-[11px] text-muted-foreground">
+                Longest side lands exactly here. Sizes below the original are downscaled.
               </p>
             </>
           ) : (
@@ -207,46 +143,29 @@ export function SettingsPanel() {
                 type="single"
                 value={String(settings.scale)}
                 onValueChange={(v) => v && setSettings({ scale: Number(v) as ScaleFactor })}
-                className="w-full gap-2"
+                className="w-full gap-1.5"
               >
                 {SCALES.map((s) => (
                   <ToggleGroupItem
                     key={s}
                     value={String(s)}
-                    aria-label={`${s} times upscale${s === 8 ? ' (small images only)' : ''}`}
-                    title={s === 8 ? '8× chains two AI passes — needs a small source image' : undefined}
-                    className="relative flex-1 rounded-lg border font-mono text-sm data-[state=on]:border-primary data-[state=on]:bg-primary/10"
+                    aria-label={`${s} times upscale`}
+                    className="flex-1 rounded-md border font-mono text-sm data-[state=on]:border-primary data-[state=on]:bg-primary/10"
                   >
-                    {s}×
-                    {s === 8 && (
-                      <span
-                        className="absolute -top-1.5 right-1 rounded-full bg-primary px-1 py-px font-sans text-[8px] font-bold uppercase tracking-wide text-primary-foreground"
-                        aria-hidden
-                      >
-                        max
-                      </span>
-                    )}
+                    {s}x
                   </ToggleGroupItem>
                 ))}
               </ToggleGroup>
-              <p className="text-[11px] leading-snug text-muted-foreground">
-                {settings.scale === 8
-                  ? '8× chains two AI passes (4× → 2×) for 64× more pixels — best for small images; larger ones auto-drop to 4×.'
-                  : `${settings.scale}× both dimensions = ${settings.scale * settings.scale}× more pixels.`}
+              <p className="text-[11px] text-muted-foreground">
+                {settings.scale}x both dimensions = {settings.scale * settings.scale}x more pixels.
               </p>
             </>
           )}
-          {!isTarget && settings.scale === 8 && settings.preset === 'studio' && (
-            <p className="flex items-start gap-1.5 rounded-md bg-amber-500/10 px-2 py-1.5 text-[11px] leading-snug text-amber-600 dark:text-amber-400">
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
-              8× on Studio chains two ~29 MB models and needs a lot of memory — Fast or Balanced is the safer pick for 8×.
-            </p>
-          )}
         </div>
 
-        {/* Output format */}
+        {/* Format */}
         <div className="space-y-2">
-          <SectionLabel n={3}>Output format</SectionLabel>
+          <SectionLabel n={2}>Format</SectionLabel>
           <ToggleGroup
             type="single"
             value={settings.format}
@@ -258,31 +177,22 @@ export function SettingsPanel() {
                 key={f.value}
                 value={f.value}
                 aria-label={`Output as ${f.label}`}
-                className="flex-1 rounded-lg border text-xs data-[state=on]:border-primary data-[state=on]:bg-primary/10"
+                className="flex-1 rounded-md border text-xs data-[state=on]:border-primary data-[state=on]:bg-primary/10"
               >
                 {f.label}
               </ToggleGroupItem>
             ))}
           </ToggleGroup>
-          <p className="text-[11px] leading-snug text-muted-foreground">
-            {settings.format === 'auto'
-              ? 'Auto keeps the original format (falls back to PNG when the browser can’t).'
-              : settings.format === 'jpeg'
-                ? 'JPEG is universal and compact — adjustable quality below.'
-                : settings.format === 'png'
-                  ? 'PNG is lossless and keeps transparency.'
-                  : 'WebP balances quality and file size — adjustable quality below.'}
-          </p>
         </div>
 
         {/* Enhance */}
         <div className="space-y-2">
-          <SectionLabel n={4}>Enhance</SectionLabel>
+          <SectionLabel n={3}>Enhance</SectionLabel>
           <div className="grid grid-cols-2 gap-2">
-            <div className="rounded-lg border p-2.5">
+            <div className="rounded-md border p-2.5">
               <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium">
                 <Wand2 className="h-3.5 w-3.5 text-primary" aria-hidden />
-                Noise cleanup
+                Denoise
               </div>
               <ToggleGroup
                 type="single"
@@ -290,9 +200,9 @@ export function SettingsPanel() {
                 onValueChange={(v) => v && setSettings({ denoise: Number(v) as 0 | 1 | 2 })}
                 className="w-full gap-1"
               >
-                <ToggleGroupItem value="0" aria-label="Noise cleanup off" className="h-7 flex-1 rounded-md border text-[11px] data-[state=on]:border-primary data-[state=on]:bg-primary/10">Off</ToggleGroupItem>
-                <ToggleGroupItem value="1" aria-label="Light noise cleanup" className="h-7 flex-1 rounded-md border text-[11px] data-[state=on]:border-primary data-[state=on]:bg-primary/10">Light</ToggleGroupItem>
-                <ToggleGroupItem value="2" aria-label="Strong noise cleanup" className="h-7 flex-1 rounded-md border text-[11px] data-[state=on]:border-primary data-[state=on]:bg-primary/10">Strong</ToggleGroupItem>
+                <ToggleGroupItem value="0" aria-label="Denoise off" className="h-7 flex-1 rounded-sm border text-[11px] data-[state=on]:border-primary data-[state=on]:bg-primary/10">Off</ToggleGroupItem>
+                <ToggleGroupItem value="1" aria-label="Light denoise" className="h-7 flex-1 rounded-sm border text-[11px] data-[state=on]:border-primary data-[state=on]:bg-primary/10">Light</ToggleGroupItem>
+                <ToggleGroupItem value="2" aria-label="Strong denoise" className="h-7 flex-1 rounded-sm border text-[11px] data-[state=on]:border-primary data-[state=on]:bg-primary/10">Strong</ToggleGroupItem>
               </ToggleGroup>
             </div>
             <button
@@ -301,25 +211,22 @@ export function SettingsPanel() {
               aria-checked={settings.sharpen}
               onClick={() => setSettings({ sharpen: !settings.sharpen })}
               className={cn(
-                'rounded-lg border p-2.5 text-left transition-colors',
-                settings.sharpen ? 'border-primary bg-primary/10' : 'hover:bg-muted/40'
+                'rounded-md border p-2.5 text-left transition-colors',
+                settings.sharpen ? 'border-primary bg-primary/10' : 'hover:bg-muted'
               )}
             >
               <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium">
                 <Sparkles className={cn('h-3.5 w-3.5', settings.sharpen ? 'text-primary' : 'text-muted-foreground')} aria-hidden />
-                Detail sharpen
+                Sharpen
               </div>
               <div className={cn('text-[11px]', settings.sharpen ? 'text-primary' : 'text-muted-foreground')}>
-                {settings.sharpen ? 'On — crisp edges' : 'Off'}
+                {settings.sharpen ? 'On' : 'Off'}
               </div>
             </button>
           </div>
-          <p className="text-[11px] leading-snug text-muted-foreground">
-            Noise cleanup removes grain &amp; pixel artifacts before the AI pass; sharpening adds crispness after.
-          </p>
         </div>
 
-        {/* Lossy quality (JPEG / WebP encoders share the setting) */}
+        {/* Quality for jpeg / webp */}
         {(settings.format === 'jpeg' || settings.format === 'webp') && (
           <div className="space-y-2.5">
             <div className="flex items-center justify-between">
@@ -338,28 +245,24 @@ export function SettingsPanel() {
               aria-label={`${settings.format === 'jpeg' ? 'JPEG' : 'WebP'} quality`}
               onValueChange={([v]) => setSettings({ jpegQuality: v })}
             />
-            <div className="flex justify-between font-mono text-[9px] uppercase tracking-wide text-muted-foreground/60">
-              <span>smaller file</span>
-              <span>finest detail</span>
-            </div>
           </div>
         )}
 
-        {/* Metadata (EXIF) — only meaningful for JPEG outputs */}
-        {(settings.format === 'jpeg' || settings.format === 'auto') && (
+        {/* EXIF */}
+        {settings.format === 'jpeg' && (
           <div
             className={cn(
-              'flex items-center justify-between gap-3 rounded-lg border p-2.5 transition-colors',
-              settings.keepExif ? 'border-primary/40 bg-primary/5' : 'hover:bg-muted/40'
+              'flex items-center justify-between gap-3 rounded-md border p-2.5 transition-colors',
+              settings.keepExif ? 'border-primary/40 bg-primary/5' : 'hover:bg-muted'
             )}
           >
             <div className="min-w-0 space-y-0.5">
               <p className="flex items-center gap-1.5 text-[11px] font-medium">
                 <Camera className={cn('h-3.5 w-3.5', settings.keepExif ? 'text-primary' : 'text-muted-foreground')} aria-hidden />
-                Keep EXIF metadata
+                Keep EXIF
               </p>
-              <p className="text-[10px] leading-snug text-muted-foreground">
-                Camera date, device &amp; GPS survive into JPEG outputs. Off = scrubbed clean.
+              <p className="text-[10px] text-muted-foreground">
+                Camera date, device and GPS survive into the output.
               </p>
             </div>
             <Switch
@@ -370,10 +273,10 @@ export function SettingsPanel() {
           </div>
         )}
 
-        <div className="rounded-lg border border-dashed border-border/70 bg-muted/30 px-3 py-2 text-[11px] leading-snug text-muted-foreground">
+        <div className="rounded-md bg-secondary px-3 py-2 text-[11px] text-secondary-foreground">
           <span className="flex items-start gap-1.5">
             <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" aria-hidden />
-            Settings apply to newly processed images. Outputs are capped at 8192 px per side; target sizes beyond 8× the original land at 8× instead.
+            Outputs are capped at 8192 px per side.
           </span>
         </div>
       </CardContent>

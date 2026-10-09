@@ -63,7 +63,7 @@ export function InstallButton() {
             <span className="hidden text-xs sm:inline">Install</span>
           </Button>
         </TooltipTrigger>
-        <TooltipContent>Install PixelForge — works offline, launches like an app</TooltipContent>
+        <TooltipContent>Install PixelForge, launches like an app</TooltipContent>
       </Tooltip>
     </TooltipProvider>
   );

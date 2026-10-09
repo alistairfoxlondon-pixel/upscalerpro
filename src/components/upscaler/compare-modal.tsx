@@ -13,7 +13,6 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { CompareSlider } from './compare-slider';
 import { CompareSideBySide } from './compare-side';
-import { PRESETS } from '@/lib/upscaler/registry';
 import { downloadBlob, resultFilename, useStore } from '@/lib/upscaler/store';
 import { copyImageToClipboard, formatBytes, formatDuration } from '@/lib/upscaler/utils';
 import { cn } from '@/lib/utils';
@@ -47,7 +46,7 @@ export function CompareModal() {
   const onDownload = async () => {
     if (!item || !r) return;
     const blob = await (await fetch(r.url)).blob();
-    downloadBlob(blob, resultFilename(item.name, r.scale, r.format));
+    downloadBlob(blob, resultFilename(item.name, r.scale, r.format, r.target));
   };
 
   const onCopy = async () => {
@@ -68,7 +67,7 @@ export function CompareModal() {
     if (!item || !r) return;
     try {
       const blob = await (await fetch(r.url)).blob();
-      const file = new File([blob], resultFilename(item.name, r.scale, r.format), {
+      const file = new File([blob], resultFilename(item.name, r.scale, r.format, r.target), {
         type: blob.type || 'image/png',
       });
       if (!navigator.canShare?.({ files: [file] })) {
@@ -102,7 +101,7 @@ export function CompareModal() {
                   </span>
                 </span>
                 <Badge variant="secondary" className="font-mono text-[10px]">
-                  {r.scale}× · {PRESETS[r.preset].model}
+                  {r.target ? `${r.target}px` : `${r.scale}x output`}
                 </Badge>
                 <span>{formatDuration(r.ms)}</span>
                 <span>
@@ -161,8 +160,8 @@ export function CompareModal() {
               )}
               <p className="hidden text-center text-[11px] text-muted-foreground sm:block">
                 {mode === 'slider'
-                  ? 'Drag the handle to compare · scroll or pinch to zoom · drag to pan when zoomed · hold Original to peek'
-                  : 'Both views share zoom and pan — scroll to zoom toward the cursor, drag to pan'}
+                  ? 'Drag the handle to compare, scroll to zoom, drag to pan when zoomed'
+                  : 'Both views share zoom and pan, scroll to zoom toward the cursor'}
               </p>
             </div>
 
