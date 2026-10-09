@@ -5,6 +5,7 @@ import {
   Download,
   Eye,
   History,
+  Keyboard,
   LayoutGrid,
   LayoutList,
   Loader2,
@@ -36,6 +37,7 @@ import {
   useStore,
 } from '@/lib/upscaler/store';
 import { formatBytes, formatDuration, copyImageToClipboard } from '@/lib/upscaler/utils';
+import { openShortcuts } from './keyboard-shortcuts';
 import type { QueueItem } from '@/lib/upscaler/store';
 import { cn } from '@/lib/utils';
 
@@ -607,34 +609,52 @@ export function Queue() {
               {doneCount}/{items.length} done
               {totals.ms > 0 && ` · ${formatDuration(totals.ms)} total`}
             </Badge>
-            {/* view switch */}
-            <div className="flex items-center rounded-lg border p-0.5" role="group" aria-label="Queue layout">
-              <button
-                type="button"
-                aria-label="List view"
-                aria-pressed={view === 'list'}
-                title="List view"
-                onClick={() => setSettings({ queueView: 'list' })}
-                className={cn(
-                  'flex h-7 w-8 items-center justify-center rounded-md transition-colors',
-                  view === 'list' ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                )}
-              >
-                <LayoutList className="h-3.5 w-3.5" aria-hidden />
-              </button>
-              <button
-                type="button"
-                aria-label="Grid view"
-                aria-pressed={view === 'grid'}
-                title="Grid view"
-                onClick={() => setSettings({ queueView: 'grid' })}
-                className={cn(
-                  'flex h-7 w-8 items-center justify-center rounded-md transition-colors',
-                  view === 'grid' ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                )}
-              >
-                <LayoutGrid className="h-3.5 w-3.5" aria-hidden />
-              </button>
+            {/* shortcuts + view switch */}
+            <div className="flex items-center gap-1">
+              <TooltipProvider delayDuration={200}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label="Keyboard shortcuts"
+                      title="Keyboard shortcuts (?)"
+                      onClick={openShortcuts}
+                      className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    >
+                      <Keyboard className="h-3.5 w-3.5" aria-hidden />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>Keyboard shortcuts</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+              <div className="flex items-center rounded-lg border p-0.5" role="group" aria-label="Queue layout">
+                <button
+                  type="button"
+                  aria-label="List view"
+                  aria-pressed={view === 'list'}
+                  title="List view (V)"
+                  onClick={() => setSettings({ queueView: 'list' })}
+                  className={cn(
+                    'flex h-7 w-8 items-center justify-center rounded-md transition-colors',
+                    view === 'list' ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  )}
+                >
+                  <LayoutList className="h-3.5 w-3.5" aria-hidden />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Grid view"
+                  aria-pressed={view === 'grid'}
+                  title="Grid view (V)"
+                  onClick={() => setSettings({ queueView: 'grid' })}
+                  className={cn(
+                    'flex h-7 w-8 items-center justify-center rounded-md transition-colors',
+                    view === 'grid' ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  )}
+                >
+                  <LayoutGrid className="h-3.5 w-3.5" aria-hidden />
+                </button>
+              </div>
             </div>
           </div>
         </div>

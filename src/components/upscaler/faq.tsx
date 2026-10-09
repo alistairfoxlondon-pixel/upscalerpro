@@ -40,6 +40,14 @@ const faqs = [
     q: 'Can I export several results at once?',
     a: 'Yes — “ZIP all” packs every included result into a single archive with clean filenames (photo_4x_upscaled.png style). Tick the small ZIP checkbox on any finished item to exclude it from the pack.',
   },
+  {
+    q: 'Can I keep camera metadata (EXIF)?',
+    a: 'By default outputs are scrubbed clean for privacy. Turn on “Keep EXIF metadata” in the settings to copy the original camera data — date, device, GPS — into JPEG results (PNG/WebP don’t carry EXIF).',
+  },
+  {
+    q: 'Are there keyboard shortcuts?',
+    a: 'Yes — Space pauses/resumes a running batch, V switches the queue between list and grid, and ? opens the full cheat sheet. Drop files anywhere on the page to add them.',
+  },
 ];
 
 export function Faq() {

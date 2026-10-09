@@ -186,3 +186,27 @@ Stage Summary:
 - New this round: live patch-mosaic processing visual, results persistence across reloads (IndexedDB, capped/best-effort), selective ZIP export, busy-tab close guard, custom PWA install button, remembered compare mode, footer/session/FAQ detail pass
 - Recovery stack unchanged & re-proven: awaitNextFrame → phase ticks → 300s watchdog → worker restart + CPU retry → clear error
 - Risks/next: SwiftShader readback wedge on huge outputs remains environmental (real GPUs are ms-fast; CPU retry of a 24-patch medium job is ~15 min — user can cancel; consider skipping AI re-run when stall hits during 'Finalizing' by capping retry readback size); restored originals are capped JPEG previews (compare-after-reload shows ≤2048px before-image — documented in FAQ); IDB restore caps at 12 items.
+
+---
+Task ID: 10
+Agent: cron-review-agent (round 7)
+Task: Status assessment + agent-browser QA, then fixes (WebP quality, EXIF UI, mobile overflow) + features (window drop, keyboard shortcuts)
+
+Work Log:
+- ASSESSMENT/QA FIRST: worklog reviewed (rounds 1-9); lint 0 / tsc 0; fresh session render ✓ zero console errors. App stable → per mandate, proceeded to fix + feature work.
+- INCIDENT (environmental): dev server died mid-QA (same as round 5). Restarted detached: `setsid nohup bash .zscripts/dev.sh` — supervisor pattern confirmed as the reliable fix.
+- BUG #10 FIXED (pre-existing): WebP outputs use the encoder quality setting but the quality slider only rendered for format=jpeg. Slider now shows for jpeg|webp with a dynamic label + "smaller file ↔ finest detail" end ticks.
+- BUG #11 FIXED (hidden feature): keepExif existed end-to-end (store → WorkerRequest.exif → worker jpegWithExif splice) but had NO UI. New "Keep EXIF metadata" Switch in settings (visible for jpeg|auto only, since PNG/WebP carry no EXIF); verified toggle → persisted to localStorage → visible in light+dark.
+- BUG #12 FIXED (pre-existing, surfaced this round): mobile 390px horizontal overflow (571px scrollWidth) — queue rows' min-content (~550px, 5-button action cluster + badges) blew out the implicit single-column grid, stretching BOTH columns. Fix: `min-w-0` on both workspace grid columns. Verified: scrollWidth = 390, truncation works, settings card fits.
+- BUG #13 FIXED (caught in my own new code during QA): window-drop onDrop called e.preventDefault() BEFORE reading e.defaultPrevented, so the dropzone-dedupe guard was always true and window drops were silently swallowed. Fix: read `handledByDropzone` first. Re-verified both paths: drop on dropzone → exactly 1 item; drop on page body → exactly 1 item.
+- FEATURE: Full-window drag & drop (window-drop.tsx) — dropping files anywhere on the page now feeds the queue; previously the browser NAVIGATED THE TAB AWAY to the raw file (queue destroyed). Depth-counted dragenter/leave with an 80ms grace debounce; `dragover` preventDefault everywhere so the browser never navigates; dropzone drops dedupe via bubble-phase defaultPrevented check. Overlay: blurred backdrop + conic ring (reuses pf-drag) + pf-fade entrance, pointer-events-none so underlying handlers still work. E2E-verified with synthetic DragEvents: overlay appears on dragenter, hides on drop, file queued (real 1×1 PNG processed → Done).
+- FEATURE: Keyboard shortcuts (keyboard-shortcuts.tsx) — Space = pause/resume (gated: only when busy||paused && hasQueued, ignored while typing in inputs/contentEditable, preventDefault stops page scroll), V = toggle list⇄grid, ? = cheat-sheet dialog (also Esc closes), plus a Keyboard icon button in the batch bar (openShortcuts() via CustomEvent). Browser-verified: ? opens dialog, V flips views (persisted), Space pauses mid-batch (amber tint + Paused note + Resume btn) and resumes, Space correctly no-ops when idle. Cheat-sheet lists all four with kbd styling. Documented in FAQ ("Are there keyboard shortcuts?").
+- QA RE-VERIFIED (recovery stack): the QA sample job wedged at Finalizing 95% (SwiftShader readback, environmental) → 300s watchdog fired → worker restart → GPU retry on fresh context → pass re-ran (3.8s) → strip readback completed (79.7s) → encoded → Done → IndexedDB save → **restored after reload** (item showed Done, 1m 20s). Full watchdog→retry→persist→restore cycle proven end-to-end with this round's code.
+- E2E flows verified this round: Fast 2× photo sample (36.5s Done), pixel-art sample in grid view (7.7s Done), both window-dropped files (Done), WebP/JPEG quality slider + EXIF toggle rendering, cheat-sheet dialog, Space pause/resume, V view toggle, grid+list layouts, mobile 390px + light/dark themes, ZIP count. Zero console errors on fresh loads.
+- REGRESSIONS GUARDED: awaitNextFrame fix untouched; worker blob-URL origin fix untouched; stall watchdog stack re-verified end-to-end (see above).
+
+Stage Summary:
+- eslint 0 problems · tsc 0 errors · dev.log clean · zero console errors on fresh sessions
+- New this round: window-wide drag & drop with overlay (fixes tab-navigation bug), keyboard shortcuts + cheat sheet (Space/V/?/Esc), WebP quality slider, EXIF-preservation UI, mobile grid blowout fix
+- Recovery stack unchanged & re-proven: awaitNextFrame → phase ticks → 300s watchdog → worker restart → GPU/CPU retry → clear error
+- Risks/next: SwiftShader Finalizing wedges remain environmental (real GPUs are ms-fast); dev server supervisor can still die (restart via setsid .zscripts/dev.sh); consider remembered compare-zoom level, and a "target longest side" scale mode as future niceties

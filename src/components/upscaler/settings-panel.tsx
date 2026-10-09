@@ -1,10 +1,11 @@
 'use client';
 
 import * as React from 'react';
-import { Zap, Gauge, Crown, AlertTriangle, Check, Wand2, Sparkles } from 'lucide-react';
+import { Zap, Gauge, Crown, AlertTriangle, Check, Wand2, Sparkles, Camera } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Slider } from '@/components/ui/slider';
+import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { PRESETS, PRESET_ORDER, SCALES } from '@/lib/upscaler/registry';
 import { useStore } from '@/lib/upscaler/store';
@@ -155,7 +156,7 @@ export function SettingsPanel() {
                 ? 'JPEG is universal and compact — adjustable quality below.'
                 : settings.format === 'png'
                   ? 'PNG is lossless and keeps transparency.'
-                  : 'WebP balances quality and file size, keeps transparency.'}
+                  : 'WebP balances quality and file size — adjustable quality below.'}
           </p>
         </div>
 
@@ -203,11 +204,13 @@ export function SettingsPanel() {
           </p>
         </div>
 
-        {/* JPEG quality */}
-        {(settings.format === 'jpeg') && (
+        {/* Lossy quality (JPEG / WebP encoders share the setting) */}
+        {(settings.format === 'jpeg' || settings.format === 'webp') && (
           <div className="space-y-2.5">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium text-muted-foreground">JPEG quality</span>
+              <span className="text-xs font-medium text-muted-foreground">
+                {settings.format === 'jpeg' ? 'JPEG' : 'WebP'} quality
+              </span>
               <span className="font-mono text-xs tabular-nums">
                 {Math.round(settings.jpegQuality * 100)}%
               </span>
@@ -217,8 +220,37 @@ export function SettingsPanel() {
               min={0.5}
               max={1}
               step={0.01}
-              aria-label="JPEG quality"
+              aria-label={`${settings.format === 'jpeg' ? 'JPEG' : 'WebP'} quality`}
               onValueChange={([v]) => setSettings({ jpegQuality: v })}
+            />
+            <div className="flex justify-between font-mono text-[9px] uppercase tracking-wide text-muted-foreground/60">
+              <span>smaller file</span>
+              <span>finest detail</span>
+            </div>
+          </div>
+        )}
+
+        {/* Metadata (EXIF) — only meaningful for JPEG outputs */}
+        {(settings.format === 'jpeg' || settings.format === 'auto') && (
+          <div
+            className={cn(
+              'flex items-center justify-between gap-3 rounded-lg border p-2.5 transition-colors',
+              settings.keepExif ? 'border-primary/40 bg-primary/5' : 'hover:bg-muted/40'
+            )}
+          >
+            <div className="min-w-0 space-y-0.5">
+              <p className="flex items-center gap-1.5 text-[11px] font-medium">
+                <Camera className={cn('h-3.5 w-3.5', settings.keepExif ? 'text-primary' : 'text-muted-foreground')} aria-hidden />
+                Keep EXIF metadata
+              </p>
+              <p className="text-[10px] leading-snug text-muted-foreground">
+                Camera date, device &amp; GPS survive into JPEG outputs. Off = scrubbed clean.
+              </p>
+            </div>
+            <Switch
+              checked={settings.keepExif}
+              onCheckedChange={(v) => setSettings({ keepExif: v })}
+              aria-label="Keep EXIF metadata in JPEG outputs"
             />
           </div>
         )}

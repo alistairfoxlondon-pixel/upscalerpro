@@ -7,6 +7,8 @@ import { Dropzone } from './dropzone';
 import { SettingsPanel } from './settings-panel';
 import { Queue } from './queue';
 import { CompareModal } from './compare-modal';
+import { WindowDrop } from './window-drop';
+import { KeyboardShortcuts } from './keyboard-shortcuts';
 
 /** Smoothly animates a number toward its target value. */
 function useCountUp(target: number, duration = 500): number {
@@ -95,7 +97,7 @@ export function Workspace() {
       aria-label="Upscaler workspace"
     >
       <div className="grid items-start gap-6 lg:grid-cols-[340px_minmax(0,1fr)]">
-        <div className="space-y-4 lg:sticky lg:top-20">
+        <div className="min-w-0 space-y-4 lg:sticky lg:top-20">
           <SettingsPanel />
           {totals.images > 0 && (
             <div className="rounded-xl border bg-card/60 p-4 text-xs text-muted-foreground shadow-sm">
@@ -130,13 +132,15 @@ export function Workspace() {
           )}
         </div>
 
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           <Dropzone />
           {hasItems && <Queue />}
         </div>
       </div>
 
       <CompareModal />
+      <WindowDrop />
+      <KeyboardShortcuts />
     </section>
   );
 }
