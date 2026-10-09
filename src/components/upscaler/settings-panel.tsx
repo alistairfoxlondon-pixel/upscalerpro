@@ -58,11 +58,16 @@ export function SettingsPanel() {
                   key={id}
                   value={id}
                   aria-label={`${p.label} — ${p.desc}`}
-                  className="h-auto flex-1 flex-col gap-1 rounded-lg border px-2 py-2.5 data-[state=on]:border-primary data-[state=on]:bg-primary/10"
+                  className="group/preset h-auto flex-1 flex-col gap-1 rounded-lg border px-2 py-2.5 data-[state=on]:border-primary data-[state=on]:bg-primary/10"
                 >
                   <Icon className="h-4 w-4" aria-hidden />
                   <span className="text-xs font-medium">{p.label}</span>
-                  <span className="flex gap-0.5">{speedDots(p.speed)}</span>
+                  <span className="flex items-center gap-1">
+                    <span className="flex gap-0.5">{speedDots(p.speed)}</span>
+                    <span className="font-mono text-[8px] leading-none text-muted-foreground/70 group-data-[state=on]/preset:text-primary/70">
+                      ~{p.sizeMB}MB
+                    </span>
+                  </span>
                 </ToggleGroupItem>
               );
             })}

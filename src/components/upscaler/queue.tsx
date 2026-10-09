@@ -4,10 +4,14 @@ import * as React from 'react';
 import {
   Download,
   Eye,
+  LayoutGrid,
+  LayoutList,
   Loader2,
   Pause,
   Play,
+  RefreshCw,
   RotateCcw,
+  Timer,
   Trash2,
   FileArchive,
   X,
@@ -21,6 +25,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { PRESETS } from '@/lib/upscaler/registry';
 import {
   downloadAllAsZip,
@@ -48,18 +53,172 @@ const statusIcon: Record<QueueItem['status'], React.ReactNode> = {
   canceled: <Ban className="h-3 w-3" aria-hidden />,
 };
 
-function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
+function StatusChip({ item }: { item: QueueItem }) {
+  return (
+    <span
+      className={cn(
+        'inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium',
+        statusStyle[item.status],
+        item.status === 'done' && 'pf-pop'
+      )}
+    >
+      {statusIcon[item.status]}
+      {item.phase}
+    </span>
+  );
+}
+
+function ProgressRing({ progress }: { progress: number }) {
+  return (
+    <svg
+      viewBox="0 0 60 60"
+      aria-hidden
+      className="pointer-events-none absolute -inset-[3px] -rotate-90 text-primary"
+    >
+      <circle cx="30" cy="30" r="28" fill="none" stroke="currentColor" strokeOpacity="0.2" strokeWidth="3" />
+      <circle
+        cx="30"
+        cy="30"
+        r="28"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="3"
+        strokeLinecap="round"
+        strokeDasharray={2 * Math.PI * 28}
+        strokeDashoffset={2 * Math.PI * 28 * (1 - progress)}
+        className="transition-[stroke-dashoffset] duration-200"
+      />
+    </svg>
+  );
+}
+
+function ItemActions({ item }: { item: QueueItem }) {
   const removeItem = useStore((s) => s.removeItem);
   const retry = useStore((s) => s.retry);
   const setCompare = useStore((s) => s.setCompare);
   const r = item.result;
 
+  return (
+    <div className="flex shrink-0 items-center gap-0.5">
+      {r && item.status === 'done' && (
+        <>
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  aria-label={`Compare ${item.name}`}
+                  onClick={() => setCompare(item.id)}
+                >
+                  <Eye className="h-4 w-4" aria-hidden />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Compare before / after</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  aria-label={`Copy ${item.name} to clipboard`}
+                  onClick={() => {
+                    void (async () => {
+                      try {
+                        await copyImageToClipboard(r.url);
+                        const { toast } = await import('sonner');
+                        toast.success('Copied to clipboard');
+                      } catch (err) {
+                        const { toast } = await import('sonner');
+                        toast.error('Could not copy', {
+                          description: err instanceof Error ? err.message : 'Clipboard unavailable',
+                        });
+                      }
+                    })();
+                  }}
+                >
+                  <Copy className="h-4 w-4" aria-hidden />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Copy to clipboard</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            aria-label={`Download ${item.name}`}
+            title="Download"
+            onClick={() => {
+              void (async () => {
+                const blob = await (await fetch(r.url)).blob();
+                downloadBlob(blob, resultFilename(item.name, r.scale, r.format));
+              })();
+            }}
+          >
+            <Download className="h-4 w-4" aria-hidden />
+          </Button>
+        </>
+      )}
+      {item.status === 'done' && (
+        <TooltipProvider delayDuration={200}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                aria-label={`Re-upscale ${item.name} with current settings`}
+                onClick={() => retry(item.id)}
+              >
+                <RefreshCw className="h-4 w-4" aria-hidden />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Re-upscale with current settings</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      )}
+      {(item.status === 'error' || item.status === 'canceled') && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          aria-label={`Retry ${item.name}`}
+          title="Retry"
+          onClick={() => retry(item.id)}
+        >
+          <RotateCcw className="h-4 w-4" aria-hidden />
+        </Button>
+      )}
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-8 w-8 text-muted-foreground hover:text-destructive"
+        aria-label={`Remove ${item.name}`}
+        title="Remove"
+        onClick={() => removeItem(item.id)}
+      >
+        <Trash2 className="h-4 w-4" aria-hidden />
+      </Button>
+    </div>
+  );
+}
+
+function buildMeta(item: QueueItem): string {
+  const r = item.result;
   const meta: string[] = [];
   if (item.w) meta.push(`${item.w}×${item.h}`);
   if (r) meta.push(`→ ${r.w}×${r.h}`);
   if (item.sizeIn) meta.push(formatBytes(item.sizeIn));
   if (r && r.size > 0) meta.push(`→ ${formatBytes(r.size)}`);
   if (r && r.ms > 0) meta.push(formatDuration(r.ms));
+  return meta.join(' · ');
+}
+
+function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
+  const r = item.result;
 
   return (
     <li
@@ -74,7 +233,6 @@ function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
       <div className="relative h-14 w-14 shrink-0">
         <div className="h-full w-full overflow-hidden rounded-lg border bg-muted/40">
         {item.thumbUrl ? (
-           
           <img
               src={item.thumbUrl}
               alt=""
@@ -89,32 +247,17 @@ function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
           </div>
         )}
           {r && (
-            <span className="absolute bottom-0 right-0 rounded-tl-md bg-primary px-1 py-px font-mono text-[9px] font-semibold text-primary-foreground">
-              {r.scale}×
+            <span className="absolute bottom-0 right-0 flex">
+              <span className="bg-black/60 px-1 py-px font-mono text-[9px] font-semibold text-white">
+                {r.format.toUpperCase()}
+              </span>
+              <span className="bg-primary px-1 py-px font-mono text-[9px] font-semibold text-primary-foreground">
+                {r.scale}×
+              </span>
             </span>
           )}
         </div>
-        {item.status === 'processing' && (
-          <svg
-            viewBox="0 0 60 60"
-            aria-hidden
-            className="pointer-events-none absolute -inset-[3px] -rotate-90 text-primary"
-          >
-            <circle cx="30" cy="30" r="28" fill="none" stroke="currentColor" strokeOpacity="0.2" strokeWidth="3" />
-            <circle
-              cx="30"
-              cy="30"
-              r="28"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="3"
-              strokeLinecap="round"
-              strokeDasharray={2 * Math.PI * 28}
-              strokeDashoffset={2 * Math.PI * 28 * (1 - item.progress)}
-              className="transition-[stroke-dashoffset] duration-200"
-            />
-          </svg>
-        )}
+        {item.status === 'processing' && <ProgressRing progress={item.progress} />}
       </div>
 
       {/* main */}
@@ -123,20 +266,11 @@ function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
           <p className="truncate text-sm font-medium" title={item.name}>
             {item.name}
           </p>
-          <span
-            className={cn(
-              'inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium',
-              statusStyle[item.status],
-              item.status === 'done' && 'pf-pop'
-            )}
-          >
-            {statusIcon[item.status]}
-            {item.phase}
-          </span>
+          <StatusChip item={item} />
         </div>
 
         <p className="mt-0.5 truncate text-[11px] text-muted-foreground tabular-nums">
-          {meta.length ? meta.join(' · ') : item.mime}
+          {buildMeta(item) || item.mime}
         </p>
 
         {item.status === 'processing' && (
@@ -156,89 +290,113 @@ function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
         )}
       </div>
 
-      {/* actions */}
-      <div className="flex shrink-0 items-center gap-0.5">
-        {r && item.status === 'done' && (
-          <>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              aria-label={`Compare ${item.name}`}
-              title="Compare before / after"
-              onClick={() => setCompare(item.id)}
-            >
-              <Eye className="h-4 w-4" aria-hidden />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              aria-label={`Copy ${item.name} to clipboard`}
-              title="Copy to clipboard"
-              onClick={() => {
-                void (async () => {
-                  try {
-                    await copyImageToClipboard(r.url);
-                    const { toast } = await import('sonner');
-                    toast.success('Copied to clipboard');
-                  } catch (err) {
-                    const { toast } = await import('sonner');
-                    toast.error('Could not copy', {
-                      description: err instanceof Error ? err.message : 'Clipboard unavailable',
-                    });
-                  }
-                })();
-              }}
-            >
-              <Copy className="h-4 w-4" aria-hidden />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              aria-label={`Download ${item.name}`}
-              title="Download"
-              onClick={() => {
-                void (async () => {
-                  const blob = await awaitBlob(r.url);
-                  downloadBlob(blob, resultFilename(item.name, r.scale, r.format));
-                })();
-              }}
-            >
-              <Download className="h-4 w-4" aria-hidden />
-            </Button>
-          </>
-        )}
-        {(item.status === 'error' || item.status === 'canceled') && (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            aria-label={`Retry ${item.name}`}
-            title="Retry"
-            onClick={() => retry(item.id)}
-          >
-            <RotateCcw className="h-4 w-4" aria-hidden />
-          </Button>
-        )}
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8 text-muted-foreground hover:text-destructive"
-          aria-label={`Remove ${item.name}`}
-          title="Remove"
-          onClick={() => removeItem(item.id)}
-        >
-          <Trash2 className="h-4 w-4" aria-hidden />
-        </Button>
-      </div>
+      <ItemActions item={item} />
     </li>
   );
 }
 
-async function awaitBlob(url: string): Promise<Blob> {
-  return (await fetch(url)).blob();
+function QueueCard({ item, index }: { item: QueueItem; index: number }) {
+  const r = item.result;
+
+  return (
+    <li
+      style={{ ['--i' as string]: Math.min(index, 11) }}
+      className={cn(
+        'pf-rise group flex flex-col gap-2 rounded-xl border bg-card/60 p-2.5 transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/40 hover:bg-card hover:shadow-md',
+        item.status === 'processing' && 'border-primary/40 bg-primary/5 shadow-[0_0_24px_-12px] shadow-primary/50',
+        item.status === 'error' && 'border-red-500/30'
+      )}
+    >
+      {/* thumbnail stage */}
+      <div className="relative aspect-square w-full overflow-hidden rounded-lg border bg-muted/40 bg-[repeating-conic-gradient(var(--border)_0%_25%,transparent_0%_50%)] bg-[length:12px_12px]">
+        {item.thumbUrl ? (
+          <img
+            src={item.thumbUrl}
+            alt=""
+            className={cn(
+              'h-full w-full object-contain p-1 transition-all duration-500',
+              item.status === 'processing' && 'scale-105 blur-[1px] brightness-90'
+            )}
+          />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center bg-background/60 text-muted-foreground">
+            <X className="h-5 w-5" aria-hidden />
+          </div>
+        )}
+
+        {/* badges */}
+        {r && (
+          <span className="absolute left-1.5 top-1.5 flex items-center gap-1">
+            <span className="rounded-md bg-primary px-1.5 py-px font-mono text-[9px] font-semibold text-primary-foreground shadow-sm">
+              {r.scale}×
+            </span>
+            <span className="rounded-md bg-black/60 px-1 py-px font-mono text-[9px] font-semibold text-white backdrop-blur-sm">
+              {r.format.toUpperCase()}
+            </span>
+          </span>
+        )}
+
+        {/* status chip overlays the top when not done */}
+        {item.status !== 'done' && (
+          <span className="absolute right-1.5 top-1.5">
+            <StatusChip item={item} />
+          </span>
+        )}
+
+        {/* centered progress ring while processing */}
+        {item.status === 'processing' && (
+          <div className="absolute inset-0 flex items-center justify-center bg-background/30 backdrop-blur-[1px]">
+            <div className="relative h-12 w-12">
+              <ProgressRing progress={item.progress} />
+              <span className="absolute inset-0 flex items-center justify-center font-mono text-[10px] font-semibold tabular-nums text-foreground">
+                {Math.round(item.progress * 100)}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* hover compare affordance */}
+        {r && item.status === 'done' && (
+          <button
+            type="button"
+            aria-label={`Compare ${item.name}`}
+            onClick={() => useStore.getState().setCompare(item.id)}
+            className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all duration-200 hover:bg-black/40 hover:opacity-100 focus-visible:opacity-100"
+          >
+            <Eye className="h-6 w-6 text-white drop-shadow" aria-hidden />
+          </button>
+        )}
+      </div>
+
+      {/* info */}
+      <div className="min-w-0 space-y-0.5 px-0.5">
+        <p className="truncate text-xs font-medium" title={item.name}>
+          {item.name}
+        </p>
+        <p className="truncate text-[10px] text-muted-foreground tabular-nums">
+          {buildMeta(item) || item.mime}
+        </p>
+        {item.status === 'processing' && (
+          <div className="flex items-center gap-1.5 pt-0.5">
+            <Progress
+              value={item.progress * 100}
+              className="h-1 pf-stripes"
+              aria-label={`${item.name} progress`}
+            />
+          </div>
+        )}
+        {item.status === 'error' && item.error && (
+          <p className="truncate text-[10px] text-red-500" title={item.error}>
+            {item.error}
+          </p>
+        )}
+      </div>
+
+      <div className="-mx-0.5 flex justify-end border-t border-border/50 pt-1.5">
+        <ItemActions item={item} />
+      </div>
+    </li>
+  );
 }
 
 export function Queue() {
@@ -251,8 +409,12 @@ export function Queue() {
   const backend = useStore((s) => s.backend);
   const gpu = useStore((s) => s.gpu);
   const totals = useStore((s) => s.totals);
+  const settings = useStore((s) => s.settings);
+  const setSettings = useStore((s) => s.setSettings);
+  const view = settings.queueView;
 
   const doneCount = items.filter((i) => i.status === 'done').length;
+  const queuedCount = items.filter((i) => i.status === 'queued').length;
   const active = items.find((i) => i.status === 'processing');
   const overall =
     items.length === 0
@@ -260,7 +422,11 @@ export function Queue() {
       : (doneCount + (active ? active.progress : 0)) / items.length;
 
   const hasDone = doneCount > 0;
-  const hasQueued = items.some((i) => i.status === 'queued');
+  const hasQueued = queuedCount > 0;
+
+  // rough ETA from the session average — only meaningful once ≥1 image finished
+  const avgMs = totals.images > 0 ? totals.ms / totals.images : 0;
+  const eta = busy && !paused && hasQueued && avgMs > 0 ? avgMs * (queuedCount + (active ? 1 - active.progress : 0)) : 0;
 
   return (
     <div className="space-y-3">
@@ -272,7 +438,7 @@ export function Queue() {
         )}
       >
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {busy && !paused && (
               <Button size="sm" variant="outline" className="h-8 gap-1.5" onClick={togglePause} disabled={!hasQueued}>
                 <Pause className="h-3.5 w-3.5" aria-hidden />
@@ -312,6 +478,16 @@ export function Queue() {
           </div>
 
           <div className="ml-auto flex items-center gap-2">
+            {eta > 0 && (
+              <Badge
+                variant="outline"
+                className="gap-1 font-mono text-[10px] tabular-nums text-muted-foreground"
+                title={`Based on the ${formatDuration(avgMs)} average of this session`}
+              >
+                <Timer className="h-3 w-3" aria-hidden />
+                ~{formatDuration(eta)} left
+              </Badge>
+            )}
             {backend && (
               <Badge
                 variant="outline"
@@ -326,6 +502,35 @@ export function Queue() {
               {doneCount}/{items.length} done
               {totals.ms > 0 && ` · ${formatDuration(totals.ms)} total`}
             </Badge>
+            {/* view switch */}
+            <div className="flex items-center rounded-lg border p-0.5" role="group" aria-label="Queue layout">
+              <button
+                type="button"
+                aria-label="List view"
+                aria-pressed={view === 'list'}
+                title="List view"
+                onClick={() => setSettings({ queueView: 'list' })}
+                className={cn(
+                  'flex h-7 w-8 items-center justify-center rounded-md transition-colors',
+                  view === 'list' ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                )}
+              >
+                <LayoutList className="h-3.5 w-3.5" aria-hidden />
+              </button>
+              <button
+                type="button"
+                aria-label="Grid view"
+                aria-pressed={view === 'grid'}
+                title="Grid view"
+                onClick={() => setSettings({ queueView: 'grid' })}
+                className={cn(
+                  'flex h-7 w-8 items-center justify-center rounded-md transition-colors',
+                  view === 'grid' ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                )}
+              >
+                <LayoutGrid className="h-3.5 w-3.5" aria-hidden />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -343,11 +548,19 @@ export function Queue() {
       </div>
 
       {/* items */}
-      <ul className="max-h-[52vh] space-y-2 overflow-y-auto pr-1 fancy-scroll" role="list">
-        {items.map((item, i) => (
-          <QueueItemRow key={item.id} item={item} index={i} />
-        ))}
-      </ul>
+      {view === 'list' ? (
+        <ul className="max-h-[52vh] space-y-2 overflow-y-auto pr-1 fancy-scroll" role="list">
+          {items.map((item, i) => (
+            <QueueItemRow key={item.id} item={item} index={i} />
+          ))}
+        </ul>
+      ) : (
+        <ul className="max-h-[58vh] grid grid-cols-2 gap-2.5 overflow-y-auto pr-1 fancy-scroll sm:grid-cols-3 xl:grid-cols-4" role="list">
+          {items.map((item, i) => (
+            <QueueCard key={item.id} item={item} index={i} />
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

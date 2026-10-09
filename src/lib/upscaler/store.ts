@@ -12,6 +12,7 @@ import type {
   WorkerOutMessage,
 } from './types';
 import { formatBytes } from './utils';
+import type { SampleKind } from './utils';
 import { makePreviewUrl, makeThumbUrl } from './utils';
 import { onWorkerMessage, postToWorker, resetWorker } from './worker-client';
 
@@ -56,6 +57,8 @@ export interface Settings {
   denoise: 0 | 1 | 2;
   /** unsharp-mask sharpening after upscale */
   sharpen: boolean;
+  /** queue layout preference */
+  queueView: 'list' | 'grid';
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -65,6 +68,7 @@ export const DEFAULT_SETTINGS: Settings = {
   jpegQuality: 0.92,
   denoise: 0,
   sharpen: false,
+  queueView: 'list',
 };
 
 export interface Totals {
@@ -91,7 +95,7 @@ interface UpscalerState {
   compareId: string | null;
 
   addFiles: (files: File[]) => Promise<void>;
-  addSample: () => Promise<void>;
+  addSample: (kind?: SampleKind) => Promise<void>;
   removeItem: (id: string) => void;
   clearFinished: () => void;
   clearAll: () => void;
@@ -464,10 +468,10 @@ export const useStore = create<UpscalerState>()(
     void ensureLoop();
   },
 
-  addSample: async () => {
+  addSample: async (kind: SampleKind = 'photo') => {
     const { createSampleFile } = await import('./utils');
     try {
-      const file = await createSampleFile();
+      const file = await createSampleFile(kind);
       await get().addFiles([file]);
     } catch (err) {
       const { toast } = await import('sonner');

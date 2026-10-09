@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Download, Copy, Share2 } from 'lucide-react';
+import { Download, Copy, Share2, SlidersHorizontal, Columns2 } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -12,14 +12,19 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { CompareSlider } from './compare-slider';
+import { CompareSideBySide } from './compare-side';
 import { PRESETS } from '@/lib/upscaler/registry';
 import { downloadBlob, resultFilename, useStore } from '@/lib/upscaler/store';
 import { copyImageToClipboard, formatBytes, formatDuration } from '@/lib/upscaler/utils';
+import { cn } from '@/lib/utils';
+
+type CompareMode = 'slider' | 'side';
 
 export function CompareModal() {
   const compareId = useStore((s) => s.compareId);
   const setCompare = useStore((s) => s.setCompare);
   const items = useStore((s) => s.items);
+  const [mode, setMode] = React.useState<CompareMode>('slider');
   const item =
     items.find((i) => i.id === compareId && i.status === 'done' && i.result) ?? null;
   const r = item?.result ?? null;
@@ -96,16 +101,58 @@ export function CompareModal() {
               </DialogDescription>
             </DialogHeader>
 
-            <div className="mt-4">
-              <CompareSlider
-                beforeSrc={item.originalUrl}
-                afterSrc={r.url}
-                aspect={r.w / r.h}
-                afterLabel={`${r.scale}× upscaled`}
-                className="max-h-[56vh]"
-              />
-              <p className="mt-2 hidden text-center text-[11px] text-muted-foreground sm:block">
-                Drag the handle to compare · scroll or pinch to zoom · drag to pan when zoomed
+            <div className="mt-4 space-y-2">
+              {/* compare mode switch */}
+              <div className="flex items-center justify-center">
+                <div
+                  className="flex items-center gap-0.5 rounded-full border bg-muted/50 p-0.5 shadow-sm"
+                  role="group"
+                  aria-label="Compare mode"
+                >
+                  {([
+                    { id: 'slider' as const, label: 'Slider', Icon: SlidersHorizontal },
+                    { id: 'side' as const, label: 'Side by side', Icon: Columns2 },
+                  ]).map(({ id, label, Icon }) => (
+                    <button
+                      key={id}
+                      type="button"
+                      aria-pressed={mode === id}
+                      onClick={() => setMode(id)}
+                      className={cn(
+                        'inline-flex h-7 items-center gap-1.5 rounded-full px-3 text-xs font-medium transition-all',
+                        mode === id
+                          ? 'bg-background text-foreground shadow-sm ring-1 ring-border'
+                          : 'text-muted-foreground hover:text-foreground'
+                      )}
+                    >
+                      <Icon className={cn('h-3.5 w-3.5', mode === id && 'text-primary')} aria-hidden />
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {mode === 'slider' ? (
+                <CompareSlider
+                  beforeSrc={item.originalUrl}
+                  afterSrc={r.url}
+                  aspect={r.w / r.h}
+                  afterLabel={`${r.scale}× upscaled`}
+                  className="max-h-[56vh]"
+                />
+              ) : (
+                <CompareSideBySide
+                  beforeSrc={item.originalUrl}
+                  afterSrc={r.url}
+                  aspect={r.w / r.h}
+                  afterLabel={`${r.scale}× upscaled`}
+                  className="max-h-[56vh]"
+                />
+              )}
+              <p className="hidden text-center text-[11px] text-muted-foreground sm:block">
+                {mode === 'slider'
+                  ? 'Drag the handle to compare · scroll or pinch to zoom · drag to pan when zoomed · hold Original to peek'
+                  : 'Both views share zoom and pan — scroll to zoom toward the cursor, drag to pan'}
               </p>
             </div>
 

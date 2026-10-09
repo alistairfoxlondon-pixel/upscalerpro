@@ -1,10 +1,10 @@
 'use client';
 
 import * as React from 'react';
-import { CloudUpload, Sparkles, ImagePlus } from 'lucide-react';
+import { CloudUpload, ImagePlus, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useStore } from '@/lib/upscaler/store';
-import { Button } from '@/components/ui/button';
+import { SAMPLES } from '@/lib/upscaler/utils';
 
 const ACCEPT = 'image/*,.heic,.heif,.hif,.tif,.tiff,.avif,.bmp,.webp';
 
@@ -112,18 +112,24 @@ export function Dropzone() {
               </span>
             ))}
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="mt-3 h-9 gap-2"
-            onClick={(e) => {
-              e.stopPropagation();
-              void addSample();
-            }}
-          >
-            <Sparkles className="h-4 w-4 text-primary" aria-hidden />
-            No image handy? Try a sample
-          </Button>
+          <div className="mt-3 flex flex-col items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground/70">No image handy? Try a sample</p>
+            <div className="flex flex-wrap items-center justify-center gap-1.5">
+              {SAMPLES.map((s) => (
+                <button
+                  key={s.kind}
+                  type="button"
+                  title={s.hint}
+                  aria-label={`Generate a sample ${s.label.toLowerCase()} image`}
+                  onClick={() => void addSample(s.kind)}
+                  className="group/sample inline-flex h-9 items-center gap-1.5 rounded-full border border-border/70 bg-background/60 px-3 text-xs font-medium text-foreground/80 shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/50 hover:bg-primary/10 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                >
+                  <Sparkles className="h-3.5 w-3.5 text-primary/70 transition-colors group-hover/sample:text-primary" aria-hidden />
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          </div>
         </>
       )}
     </div>

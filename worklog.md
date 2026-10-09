@@ -136,3 +136,30 @@ Stage Summary:
 - New this round: two-finger pinch zoom with focal anchoring, clipboard copy everywhere, Web Share (mobile), GPU name tooltip, batch-complete toast with ZIP shortcut, Studio+8× memory warning, finer readback feedback
 - Recovery stack unchanged: awaitNextFrame → phase messages → 300s watchdog → worker restart + CPU retry → clear error (re-verified end-to-end twice this round)
 - Risks/next: SwiftShader readback wedge remains environmental (real GPUs unaffected); consider IndexedDB model cache; remember compare-zoom preference; optional EXIF-preserving JPEG export
+
+---
+Task ID: 8
+Agent: cron-review-agent (round 5)
+Task: Status assessment + agent-browser QA, then feature expansion (3 sample types, re-upscale, side-by-side compare + peek, grid view, ETA) + styling detail pass
+
+Work Log:
+- ASSESSMENT/QA FIRST: worklog reviewed; render ✓, console clean, photo-sample 4× E2E ✓ (96×72→384×288), compare modal ✓, ZIP ✓. App stable → feature work per mandate.
+- INCIDENT: dev server (system supervisor .zscripts/dev.sh, PID 996) died mid-QA; restarts via plain nohup died with the bash session. Fix: `setsid nohup bash .zscripts/dev.sh` fully detached → stable supervised server (bun install + db:push + dev + health check + mini-services).
+- BUG #9 FIXED (pre-existing edge): hold-to-peek used a peek-conditional window pointerup listener — an ultra-fast tap (< 1 frame) could release before the effect attached, stranding the peek ON. Fix: listeners attached unconditionally for the component lifetime (+ window blur). Verified: fast-tap → restores 50%, hold → inset(0 0 0 100%) (original shown), release → 50%.
+- FEATURE: 3 generated sample types — utils.ts reworked into drawPhoto/drawPixel/drawText + SAMPLES metadata + canvasToFile/shrink helpers. Pixel art: 40×40 hand-plotted retro scene (invader/coin/heart/mountains) crushed to 60×60 PNG. Text scan: 720×960 "THE DAILY PIXEL" newspaper (serif headline, receipt, VERIFIED stamp) crushed to 170×227 JPEG. Dropzone now shows 3 pill chips (Photo/Pixel art/Text scan) with stopPropagation wrapper + hover polish. E2E-verified ALL THREE: photo 96×72→384×288, pixel 60×60→240×240, text 170×227→680×908 (text recovery is striking in side-by-side).
+- FEATURE: Re-upscale button (RefreshCw, tooltip) on done rows/cards — re-queues the same File with current settings (retry path reused; settings read at process time). Verified: re-ran sample, new job processed → Done.
+- FEATURE: Compare modal mode switch — segmented pill toggle (Slider ⇄ Side by side, SlidersHorizontal/Columns2 icons). New compare-side.tsx: two checkerboard panes sharing ONE zoom/pan transform (wheel-to-cursor, drag-pan, pinch with focal anchoring — same math family as slider), zoom cluster, keyboard +/-/0/arrows, per-mode hint lines. Verified: wheel zoom → both panes identical `translate(44.54px, 8.71px) scale(1.246)`.
+- FEATURE: hold-to-peek Original button in CompareSlider (bottom-left, mirrors zoom cluster; aria-pressed; keyboard B hold; stopPropagation so it never starts divider/pan/pinch).
+- FEATURE: queue grid view — Settings.queueView ('list'|'grid', persisted via existing settings persist). Batch-bar icon toggle (LayoutList/LayoutGrid, aria-pressed). Grid cards: aspect-square checkerboard stage + object-contain thumb, dual badge (format+scale) top-left, status chip, centered progress ring with live % while processing, hover Eye overlay → compare, meta line, actions row. Verified at 1280 & 390px; queueView survives reload.
+- FEATURE: output-format badge (JPEG/PNG/WebP mono chip) — grid cards (top-left) AND list rows (bottom-right, stacked with scale chip).
+- FEATURE: ETA badge in batch bar — `~formatDuration(avgMs × (queued + 1−activeProgress)) left` from session averages, Tooltip explains basis, only when busy && !paused && queued>0. Verified live: "~41.3s left" during 3-file injected batch.
+- STYLING: settings preset cards now show weight-size chips (~1MB/~3MB/~29MB) via group/preset named-group data-state tint; grid card hover lift + processing glow consistent with list rows; dropzone sample pills with icon tint transition; dual-badge stack on list thumbs.
+- QA MATRIX (all browser-verified): side-by-side sync ✓, peek hold/release/fast-tap ✓, mode toggle ✓, grid+list toggle + persistence ✓, format badges ✓, Re-upscale ✓, ETA ✓, ZIP 5 items ("205.9 KB") ✓, light+dark ✓, 390px no overflow ✓, console 0 errors ✓, fresh load clean ✓.
+- WATCHDOG RE-VERIFIED with new code: batch-0 SwiftShader readback wedge at Finalizing 95% → 300s watchdog → worker restart → CPU retry → Done; queue continued batch-1 (Done) + batch-2 (Done). 5/5 batch completed automatically, ZIP 205.9 KB.
+- TOOLS NOTE: agent-browser viewport = `agent-browser set viewport <w> <h>` (not `resize`/`viewport`).
+
+Stage Summary:
+- eslint 0 · tsc 0 · dev.log clean · zero console errors on fresh load
+- New this round: 3 on-device sample generators (photo/pixel/text), Re-upscale with current settings, Side-by-side synced-zoom compare mode, hold-to-peek original (mouse+touch+keyboard), persisted grid/list queue views with rich cards, per-item format badges, live ETA estimate
+- Recovery stack unchanged & re-proven: awaitNextFrame → phase ticks → 300s watchdog → worker restart + CPU retry → clear error
+- Risks/next: SwiftShader readback remains the headless bottleneck (environmental); text sample readback ~60-90s headless but ticks Finalizing %. Possible next: remember compare mode + peek preference; grid-view virtualization beyond ~200 items (cap is 50 so low risk); optional EXIF-preserving JPEG export; settings "Apply to queued" explicit affordance.

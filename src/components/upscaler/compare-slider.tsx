@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { ChevronsLeftRight, Minus, Plus, Maximize, Scan } from 'lucide-react';
+import { ChevronsLeftRight, Eye, Minus, Plus, Maximize, Scan } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface CompareSliderProps {
@@ -34,6 +34,8 @@ export function CompareSlider({
   const [pos, setPos] = React.useState(50);
   const [zoom, setZoom] = React.useState(1);
   const [pan, setPan] = React.useState({ x: 0, y: 0 });
+  // hold-to-peek: while held, the after image is fully clipped away
+  const [peek, setPeek] = React.useState(false);
 
   // refs mirror state for smooth, re-render-free gesture math
   const zoomRef = React.useRef(1);
@@ -56,7 +58,23 @@ export function CompareSlider({
     setZoom(1);
     setPan({ x: 0, y: 0 });
     setPos(50);
+    setPeek(false);
   }, [beforeSrc, afterSrc]);
+
+  // release the peek even if the pointer comes up outside the button —
+  // listeners live for the component's lifetime so ultra-fast taps can't
+  // strand the peek state before the effect would have attached
+  React.useEffect(() => {
+    const end = () => setPeek(false);
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+    window.addEventListener('blur', end);
+    return () => {
+      window.removeEventListener('pointerup', end);
+      window.removeEventListener('pointercancel', end);
+      window.removeEventListener('blur', end);
+    };
+  }, []);
 
   const clampPan = React.useCallback((x: number, y: number, z: number) => {
     const el = containerRef.current;
@@ -235,7 +253,14 @@ export function CompareSlider({
     } else if (e.key === '0' || e.key === 'f') {
       e.preventDefault();
       applyZoom(1);
+    } else if (e.key === 'b' || e.key === 'B') {
+      e.preventDefault();
+      if (!e.repeat) setPeek(true);
     }
+  };
+
+  const onKeyUp = (e: React.KeyboardEvent) => {
+    if (e.key === 'b' || e.key === 'B') setPeek(false);
   };
 
   return (
@@ -250,6 +275,7 @@ export function CompareSlider({
         aria-valuemax={100}
         aria-valuetext={`${Math.round(pos)}% after image revealed`}
         onKeyDown={onKeyDown}
+        onKeyUp={onKeyUp}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={stop}
@@ -281,7 +307,7 @@ export function CompareSlider({
             alt="Upscaled image"
             draggable={false}
             className="pointer-events-none absolute inset-0 h-full w-full object-contain"
-            style={{ clipPath: `inset(0 0 0 ${pos}%)` }}
+            style={{ clipPath: `inset(0 0 0 ${peek ? 100 : pos}%)` }}
           />
 
           {/* divider (visual) + interactive grab pad — both live in stage space
@@ -321,6 +347,29 @@ export function CompareSlider({
         <span className="pointer-events-none absolute right-2 top-2 z-10 rounded-md bg-primary/90 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary-foreground backdrop-blur">
           {afterLabel}
         </span>
+
+        {/* hold-to-peek original (bottom-left, mirrors the zoom cluster) */}
+        <button
+          type="button"
+          aria-label="Hold to view the original image"
+          aria-pressed={peek}
+          title="Hold to peek original (B)"
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            setPeek(true);
+          }}
+          onClick={(e) => e.stopPropagation()}
+          onPointerMove={(e) => e.stopPropagation()}
+          className={cn(
+            'absolute bottom-2 left-2 z-10 flex h-7 items-center gap-1.5 rounded-lg border px-2 text-[10px] font-medium shadow-md backdrop-blur transition-colors select-none touch-none',
+            peek
+              ? 'border-primary/60 bg-primary text-primary-foreground'
+              : 'bg-background/85 text-foreground hover:bg-muted'
+          )}
+        >
+          <Eye className="h-3.5 w-3.5" aria-hidden />
+          Original
+        </button>
 
         {/* zoom controls */}
         <div className="absolute bottom-2 right-2 z-10 flex items-center gap-0.5 rounded-lg border bg-background/85 p-0.5 shadow-md backdrop-blur">
@@ -370,7 +419,7 @@ export function CompareSlider({
       </div>
 
       <p className="mt-1.5 text-center text-[10px] text-muted-foreground sm:hidden">
-        Pinch to zoom · drag to pan when zoomed
+        Pinch to zoom · drag to pan when zoomed · hold Original to peek
       </p>
     </div>
   );
