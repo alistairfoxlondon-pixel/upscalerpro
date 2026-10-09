@@ -1,13 +1,13 @@
 'use client';
 
 import * as React from 'react';
-import { Zap, Gauge, Crown, AlertTriangle, Check, Wand2, Sparkles, Camera } from 'lucide-react';
+import { Zap, Gauge, Crown, AlertTriangle, Check, Wand2, Sparkles, Camera, Ratio, Ruler } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
-import { PRESETS, PRESET_ORDER, SCALES } from '@/lib/upscaler/registry';
+import { PRESETS, PRESET_ORDER, SCALES, TARGET_PRESETS, TARGET_MIN, TARGET_MAX } from '@/lib/upscaler/registry';
 import { useStore } from '@/lib/upscaler/store';
 import type { FormatChoice, PresetId, ScaleFactor } from '@/lib/upscaler/types';
 import { cn } from '@/lib/utils';
@@ -23,10 +23,35 @@ const FORMATS: { value: FormatChoice; label: string }[] = [
   { value: 'webp', label: 'WebP' },
 ];
 
+/** numbered section label — gives the panel a scannable step rhythm */
+function SectionLabel({ n, children, right }: { n: number; children: React.ReactNode; right?: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+        <span
+          aria-hidden
+          className="grid h-4 w-4 place-items-center rounded-full border border-border/80 bg-muted/60 font-mono text-[9px] font-bold text-muted-foreground"
+        >
+          {n}
+        </span>
+        {children}
+      </span>
+      {right}
+    </div>
+  );
+}
+
 export function SettingsPanel() {
   const settings = useStore((s) => s.settings);
   const setSettings = useStore((s) => s.setSettings);
   const preset = PRESETS[settings.preset];
+  const isTarget = settings.scaleMode === 'target';
+  const targetValid = settings.targetSide >= TARGET_MIN && settings.targetSide <= TARGET_MAX;
+
+  const commitTarget = (raw: number) => {
+    const side = Math.round(raw);
+    setSettings({ targetSide: Math.min(TARGET_MAX, Math.max(TARGET_MIN, side)) });
+  };
 
   return (
     <Card className="shadow-sm">
@@ -41,10 +66,9 @@ export function SettingsPanel() {
       <CardContent className="space-y-5">
         {/* Model preset */}
         <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-muted-foreground">AI engine</span>
-            <span className="text-[10px] text-muted-foreground">speed → quality</span>
-          </div>
+          <SectionLabel n={1} right={<span className="text-[10px] text-muted-foreground">speed → quality</span>}>
+            AI engine
+          </SectionLabel>
           <ToggleGroup
             type="single"
             value={settings.preset}
@@ -82,46 +106,137 @@ export function SettingsPanel() {
           )}
         </div>
 
-        {/* Scale */}
+        {/* Size: factor multiplier or exact target side */}
         <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-muted-foreground">Upscale factor</span>
-            <span className="text-[10px] tabular-nums text-muted-foreground">
-              {settings.scale}× = {settings.scale * settings.scale}× more pixels
-            </span>
-          </div>
-          <ToggleGroup
-            type="single"
-            value={String(settings.scale)}
-            onValueChange={(v) => v && setSettings({ scale: Number(v) as ScaleFactor })}
-            className="w-full gap-2"
-          >
-            {SCALES.map((s) => (
-              <ToggleGroupItem
-                key={s}
-                value={String(s)}
-                aria-label={`${s} times upscale${s === 8 ? ' (small images only)' : ''}`}
-                title={s === 8 ? '8× chains two AI passes — needs a small source image' : undefined}
-                className="relative flex-1 rounded-lg border font-mono text-sm data-[state=on]:border-primary data-[state=on]:bg-primary/10"
+          <SectionLabel
+            n={2}
+            right={
+              <div
+                role="group"
+                aria-label="Size mode"
+                className="flex items-center rounded-full border border-border/70 bg-muted/40 p-0.5"
               >
-                {s}×
-                {s === 8 && (
-                  <span
-                    className="absolute -top-1.5 right-1 rounded-full bg-primary px-1 py-px font-sans text-[8px] font-bold uppercase tracking-wide text-primary-foreground"
-                    aria-hidden
+                <button
+                  type="button"
+                  aria-pressed={!isTarget}
+                  title="Multiply width & height by a fixed factor"
+                  onClick={() => setSettings({ scaleMode: 'factor' })}
+                  className={cn(
+                    'flex h-5 items-center gap-1 rounded-full px-2 text-[10px] font-medium transition-colors',
+                    !isTarget ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  <Ratio className="h-3 w-3" aria-hidden />
+                  Factor
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={isTarget}
+                  title="Reach an exact longest-side size"
+                  onClick={() => setSettings({ scaleMode: 'target' })}
+                  className={cn(
+                    'flex h-5 items-center gap-1 rounded-full px-2 text-[10px] font-medium transition-colors',
+                    isTarget ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >
+                  <Ruler className="h-3 w-3" aria-hidden />
+                  Target
+                </button>
+              </div>
+            }
+          >
+            Output size
+          </SectionLabel>
+
+          {isTarget ? (
+            <>
+              <ToggleGroup
+                type="single"
+                value={TARGET_PRESETS.some((t) => t.side === settings.targetSide) ? String(settings.targetSide) : ''}
+                onValueChange={(v) => v && commitTarget(Number(v))}
+                className="w-full gap-1.5"
+              >
+                {TARGET_PRESETS.map((t) => (
+                  <ToggleGroupItem
+                    key={t.side}
+                    value={String(t.side)}
+                    aria-label={`Target ${t.label} — longest side ${t.side} pixels`}
+                    className="flex-1 flex-col gap-0 rounded-lg border px-1 py-1.5 data-[state=on]:border-primary data-[state=on]:bg-primary/10"
                   >
-                    max
-                  </span>
-                )}
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-          {settings.scale === 8 && (
-            <p className="text-[11px] leading-snug text-muted-foreground">
-              8× chains two AI passes (4× → 2×) for 64× more pixels — best for small images; larger ones auto-drop to 4×.
-            </p>
+                    <span className="font-mono text-xs leading-tight">{t.side}px</span>
+                    <span className="text-[8px] font-semibold uppercase tracking-wide text-muted-foreground/70 group-data-[state=on]:text-primary/70">
+                      {t.label}
+                    </span>
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+              <div className="flex items-center gap-2">
+                <div
+                  className={cn(
+                    'flex h-8 flex-1 items-center rounded-lg border bg-background/60 pl-2.5 transition-colors focus-within:ring-2 focus-within:ring-primary/50',
+                    targetValid ? 'border-border/80' : 'border-red-500/60'
+                  )}
+                >
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min={TARGET_MIN}
+                    max={TARGET_MAX}
+                    step={80}
+                    value={settings.targetSide}
+                    aria-label="Custom target size, longest side in pixels"
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (Number.isFinite(v)) setSettings({ targetSide: Math.min(TARGET_MAX, Math.max(0, Math.round(v))) });
+                    }}
+                    onBlur={(e) => commitTarget(Number(e.target.value))}
+                    className="h-full w-full bg-transparent font-mono text-sm tabular-nums outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                  />
+                  <span className="pr-2.5 font-mono text-[10px] text-muted-foreground">px side</span>
+                </div>
+              </div>
+              <p className="text-[11px] leading-snug text-muted-foreground">
+                {targetValid
+                  ? 'Longest side lands exactly here — the AI scale is picked automatically per image, then fine-tuned with a high-quality resize.'
+                  : `Pick a value between ${TARGET_MIN} and ${TARGET_MAX} px.`}
+              </p>
+            </>
+          ) : (
+            <>
+              <ToggleGroup
+                type="single"
+                value={String(settings.scale)}
+                onValueChange={(v) => v && setSettings({ scale: Number(v) as ScaleFactor })}
+                className="w-full gap-2"
+              >
+                {SCALES.map((s) => (
+                  <ToggleGroupItem
+                    key={s}
+                    value={String(s)}
+                    aria-label={`${s} times upscale${s === 8 ? ' (small images only)' : ''}`}
+                    title={s === 8 ? '8× chains two AI passes — needs a small source image' : undefined}
+                    className="relative flex-1 rounded-lg border font-mono text-sm data-[state=on]:border-primary data-[state=on]:bg-primary/10"
+                  >
+                    {s}×
+                    {s === 8 && (
+                      <span
+                        className="absolute -top-1.5 right-1 rounded-full bg-primary px-1 py-px font-sans text-[8px] font-bold uppercase tracking-wide text-primary-foreground"
+                        aria-hidden
+                      >
+                        max
+                      </span>
+                    )}
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+              <p className="text-[11px] leading-snug text-muted-foreground">
+                {settings.scale === 8
+                  ? '8× chains two AI passes (4× → 2×) for 64× more pixels — best for small images; larger ones auto-drop to 4×.'
+                  : `${settings.scale}× both dimensions = ${settings.scale * settings.scale}× more pixels.`}
+              </p>
+            </>
           )}
-          {settings.scale === 8 && settings.preset === 'studio' && (
+          {!isTarget && settings.scale === 8 && settings.preset === 'studio' && (
             <p className="flex items-start gap-1.5 rounded-md bg-amber-500/10 px-2 py-1.5 text-[11px] leading-snug text-amber-600 dark:text-amber-400">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
               8× on Studio chains two ~29 MB models and needs a lot of memory — Fast or Balanced is the safer pick for 8×.
@@ -131,7 +246,7 @@ export function SettingsPanel() {
 
         {/* Output format */}
         <div className="space-y-2">
-          <span className="text-xs font-medium text-muted-foreground">Output format</span>
+          <SectionLabel n={3}>Output format</SectionLabel>
           <ToggleGroup
             type="single"
             value={settings.format}
@@ -162,7 +277,7 @@ export function SettingsPanel() {
 
         {/* Enhance */}
         <div className="space-y-2">
-          <span className="text-xs font-medium text-muted-foreground">Enhance</span>
+          <SectionLabel n={4}>Enhance</SectionLabel>
           <div className="grid grid-cols-2 gap-2">
             <div className="rounded-lg border p-2.5">
               <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium">
@@ -256,9 +371,9 @@ export function SettingsPanel() {
         )}
 
         <div className="rounded-lg border border-dashed border-border/70 bg-muted/30 px-3 py-2 text-[11px] leading-snug text-muted-foreground">
-          <span className="flex items-center gap-1.5">
-            <Check className="h-3.5 w-3.5 text-primary" aria-hidden />
-            Settings apply to newly processed images. Very large outputs are auto-capped at 8192 px per side.
+          <span className="flex items-start gap-1.5">
+            <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" aria-hidden />
+            Settings apply to newly processed images. Outputs are capped at 8192 px per side; target sizes beyond 8× the original land at 8× instead.
           </span>
         </div>
       </CardContent>

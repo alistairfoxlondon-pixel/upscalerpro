@@ -3,6 +3,7 @@
 import * as React from 'react';
 import { ChevronsLeftRight, Eye, Minus, Plus, Maximize, Scan } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useRememberedZoom, MIN_ZOOM, MAX_ZOOM } from './use-remembered-zoom';
 
 interface CompareSliderProps {
   beforeSrc: string;
@@ -12,9 +13,6 @@ interface CompareSliderProps {
   afterLabel?: string;
   className?: string;
 }
-
-const MIN_ZOOM = 1;
-const MAX_ZOOM = 6;
 
 /**
  * Accessible before/after comparison slider (pointer + keyboard) with
@@ -30,15 +28,16 @@ export function CompareSlider({
   afterLabel = 'After',
   className,
 }: CompareSliderProps) {
+  const { initialZoom, persistZoom } = useRememberedZoom();
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [pos, setPos] = React.useState(50);
-  const [zoom, setZoom] = React.useState(1);
+  const [zoom, setZoom] = React.useState(initialZoom);
   const [pan, setPan] = React.useState({ x: 0, y: 0 });
   // hold-to-peek: while held, the after image is fully clipped away
   const [peek, setPeek] = React.useState(false);
 
   // refs mirror state for smooth, re-render-free gesture math
-  const zoomRef = React.useRef(1);
+  const zoomRef = React.useRef(initialZoom());
   const panRef = React.useRef({ x: 0, y: 0 });
   const mode = React.useRef<'divider' | 'pan' | 'pinch' | null>(null);
   const lastPan = React.useRef({ x: 0, y: 0 });
@@ -51,15 +50,17 @@ export function CompareSlider({
     startMid: { x: number; y: number };
   } | null>(null);
 
-  // reset when a different image pair is shown
+  // reset when a different image pair is shown — zoom restores to the
+  // remembered level, pan always re-centers
   React.useEffect(() => {
-    zoomRef.current = 1;
+    const z = initialZoom();
+    zoomRef.current = z;
     panRef.current = { x: 0, y: 0 };
-    setZoom(1);
+    setZoom(z);
     setPan({ x: 0, y: 0 });
     setPos(50);
     setPeek(false);
-  }, [beforeSrc, afterSrc]);
+  }, [beforeSrc, afterSrc, initialZoom]);
 
   // release the peek even if the pointer comes up outside the button —
   // listeners live for the component's lifetime so ultra-fast taps can't
@@ -112,8 +113,9 @@ export function CompareSlider({
       panRef.current = nextPan;
       setZoom(next);
       setPan(nextPan);
+      persistZoom(next);
     },
-    [clampPan]
+    [clampPan, persistZoom]
   );
 
   // wheel zoom — React attaches onWheel passively, so bind manually
@@ -201,6 +203,7 @@ export function CompareSlider({
         panRef.current = next;
         setZoom(nextZoom);
         setPan(next);
+        persistZoom(nextZoom);
       }
       return;
     }

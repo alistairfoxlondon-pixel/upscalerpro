@@ -12,6 +12,8 @@ export type PresetId = 'fast' | 'balanced' | 'studio';
 export type ScaleFactor = 2 | 3 | 4 | 8;
 export type OutputFormat = 'jpeg' | 'png' | 'webp';
 export type FormatChoice = OutputFormat | 'auto';
+/** how the output size is chosen: fixed AI multiplier or a target longest side */
+export type ScaleMode = 'factor' | 'target';
 
 export interface PresetMeta {
   id: PresetId;
@@ -37,6 +39,8 @@ export interface WorkerRequest {
   sharpen: boolean;
   /** original JPEG APP1 EXIF segment — copied into JPEG outputs when opted in */
   exif?: ArrayBuffer;
+  /** target-mode: resize the output so its longest side is exactly this (px) */
+  targetSide?: number;
   /** force a specific tfjs backend (used by the stall watchdog to retry on CPU) */
   backendHint?: 'webgl' | 'cpu';
 }

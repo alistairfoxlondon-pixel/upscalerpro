@@ -4,7 +4,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { decodeImageFile } from './decode';
 import { extractExifSegment } from './exif';
-import { MAX_BATCH_FILES, MAX_INPUT_PIXELS, extForFormat, resolveFormat, resolveScale } from './registry';
+import { MAX_BATCH_FILES, MAX_INPUT_PIXELS, extForFormat, resolveFormat, resolveScale, resolveScaleForTarget, type SizeFit } from './registry';
 import {
   idbClearResults,
   idbDeleteResult,
@@ -36,6 +36,8 @@ export interface ResultData {
   preset: PresetId;
   format: OutputFormat;
   clamped: boolean;
+  /** target-mode: exact longest side the output was sized to */
+  target?: number;
 }
 
 export interface QueueItem {
@@ -78,6 +80,12 @@ export interface Settings {
   queueView: 'list' | 'grid';
   /** preferred compare-modal view */
   compareMode: 'slider' | 'side';
+  /** remembered pixel-peep zoom level (restored for each comparison) */
+  compareZoom: number;
+  /** how the output size is chosen: fixed multiplier or exact longest side */
+  scaleMode: 'factor' | 'target';
+  /** target-mode: longest output side in px */
+  targetSide: number;
   /** copy the original EXIF metadata into JPEG outputs (off = scrubbed clean) */
   keepExif: boolean;
 }
@@ -91,6 +99,9 @@ export const DEFAULT_SETTINGS: Settings = {
   sharpen: false,
   queueView: 'list',
   compareMode: 'slider',
+  compareZoom: 1,
+  scaleMode: 'factor',
+  targetSide: 1920,
   keepExif: false,
 };
 
@@ -293,6 +304,7 @@ async function savePersisted(item: QueueItem, blob: Blob, result: ResultData) {
         preset: result.preset,
         format: result.format,
         clamped: result.clamped,
+        target: result.target,
       },
       savedAt: Date.now(),
     };
@@ -390,6 +402,7 @@ function wireWorker() {
               ? 'webp'
               : 'png',
           clamped: planned?.clamped ?? false,
+          target: planned?.target,
         };
         patchItem(m.id, {
           status: 'done',
@@ -466,13 +479,17 @@ async function processItem(id: string): Promise<void> {
 
   const resolved: OutputFormat = format === 'auto' ? resolveFormat(item.mime, item.name) : format;
 
-  // memory safety: pick the largest allowed scale
-  const fit = resolveScale(item.w, item.h, scale);
-  if (!fit) {
+  // memory safety: pick the largest allowed scale (factor mode) or the smallest
+  // AI scale that meets the target size, then resize (target mode)
+  const fit: SizeFit | null =
+    state.settings.scaleMode === 'target'
+      ? resolveScaleForTarget(item.w, item.h, state.settings.targetSide)
+      : resolveScale(item.w, item.h, scale);
+  if (!fit || fit.error) {
     patchItem(id, {
       status: 'error',
       phase: 'Failed',
-      error: 'Image is too large to upscale on this device',
+      error: fit?.error ?? 'Image is too large to upscale on this device',
     });
     return;
   }
@@ -481,22 +498,27 @@ async function processItem(id: string): Promise<void> {
     const { bitmap } = await decodeImageFile(item.file);
     const modelKey = `${preset}:${fit.scale}`;
     useStore.setState({ modelKey, modelStatus: null, modelMessage: null });
+    // planned result placeholder — carries the plan (scale/format) and
+    // estimated output size until the worker reports the real values
+    const planned: ResultData = {
+      url: '',
+      size: 0,
+      w: fit.outW,
+      h: fit.outH,
+      ms: 0,
+      scale: fit.scale,
+      preset,
+      format: resolved,
+      clamped: fit.clamped ?? false,
+      target:
+        state.settings.scaleMode === 'target' && !fit.short && !fit.error
+          ? state.settings.targetSide
+          : undefined,
+    };
     patchItem(id, {
       phase: 'Loading model',
       progress: 0.01,
-      // planned result placeholder — carries the plan (scale/format) and
-      // estimated output size until the worker reports the real values
-      result: {
-        url: '',
-        size: 0,
-        w: item.w * fit.scale,
-        h: item.h * fit.scale,
-        ms: 0,
-        scale: fit.scale,
-        preset,
-        format: resolved,
-        clamped: fit.clamped,
-      },
+      result: planned,
     });
     // Opt-in metadata preservation: pull the original JPEG APP1 EXIF segment
     // (first 256 KB header scan — cheap) so the worker can splice it into the
@@ -519,6 +541,7 @@ async function processItem(id: string): Promise<void> {
         denoise,
         sharpen,
         exif: exif ?? undefined,
+        targetSide: planned.target,
         backendHint: item.cpuRetry ? 'cpu' : undefined,
       },
       transfer
@@ -607,8 +630,21 @@ export const useStore = create<UpscalerState>()(
       return;
     }
     const capped = list.slice(0, MAX_BATCH_FILES);
+    // duplicate guard: same name + byte size already queued (or twice in this
+    // batch) — a re-added file would just waste GPU time on an identical job
+    const seen = new Set<string>();
+    for (const it of useStore.getState().items) {
+      if (it.file) seen.add(`${it.name}:${it.sizeIn}`);
+    }
+    let dupes = 0;
     const items: QueueItem[] = [];
     for (const file of capped) {
+      const key = `${file.name || 'image'}:${file.size}`;
+      if (seen.has(key)) {
+        dupes++;
+        continue;
+      }
+      seen.add(key);
       const id = crypto.randomUUID();
       const name = file.name || `image-${id.slice(0, 6)}`;
       try {
@@ -644,6 +680,12 @@ export const useStore = create<UpscalerState>()(
       }
     }
     set((s) => ({ items: [...s.items, ...items] }));
+    if (dupes > 0) {
+      const { toast } = await import('sonner');
+      toast.info(`${dupes} duplicate file${dupes > 1 ? 's' : ''} skipped`, {
+        description: 'Already in the queue.',
+      });
+    }
     const skipped = list.length - capped.length;
     if (skipped > 0) {
       const { toast } = await import('sonner');
@@ -772,6 +814,7 @@ export const useStore = create<UpscalerState>()(
           preset: row.result.preset,
           format: row.result.format,
           clamped: row.result.clamped,
+          target: row.result.target,
         },
         restored: true,
       });
@@ -828,9 +871,15 @@ export function downloadBlob(blob: Blob, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
-export function resultFilename(name: string, scale: ScaleFactor, format: OutputFormat): string {
+export function resultFilename(
+  name: string,
+  scale: ScaleFactor,
+  format: OutputFormat,
+  target?: number
+): string {
   const base = name.replace(/\.[^.]+$/, '') || 'image';
-  return `${base}_${scale}x_upscaled.${extForFormat(format)}`;
+  const label = target ? `${target}px` : `${scale}x`;
+  return `${base}_${label}_upscaled.${extForFormat(format)}`;
 }
 
 export async function downloadAllAsZip() {
@@ -845,10 +894,10 @@ export async function downloadAllAsZip() {
     const used = new Set<string>();
     for (const item of done) {
       const r = item.result!;
-      let filename = resultFilename(item.name, r.scale, r.format);
+      let filename = resultFilename(item.name, r.scale, r.format, r.target);
       let i = 1;
       while (used.has(filename)) {
-        filename = resultFilename(item.name, r.scale, r.format).replace(/(\.\w+)$/, `-${i++}$1`);
+        filename = resultFilename(item.name, r.scale, r.format, r.target).replace(/(\.\w+)$/, `-${i++}$1`);
       }
       used.add(filename);
       const blob = await (await fetch(r.url)).blob();

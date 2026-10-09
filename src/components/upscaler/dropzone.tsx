@@ -104,34 +104,41 @@ export function Dropzone() {
       </div>
 
       {!hasItems && (
-        <>
-          <div className="mt-2 flex flex-wrap items-center justify-center gap-1.5 text-[10px] text-muted-foreground">
-            {['JPEG', 'PNG', 'WebP', 'AVIF', 'GIF', 'BMP', 'HEIC', 'TIFF'].map((f) => (
-              <span key={f} className="rounded-md border border-border/60 bg-background/50 px-1.5 py-0.5 font-mono">
-                {f}
-              </span>
-            ))}
-          </div>
-          <div className="mt-3 flex flex-col items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground/70">No image handy? Try a sample</p>
-            <div className="flex flex-wrap items-center justify-center gap-1.5">
-              {SAMPLES.map((s) => (
-                <button
-                  key={s.kind}
-                  type="button"
-                  title={s.hint}
-                  aria-label={`Generate a sample ${s.label.toLowerCase()} image`}
-                  onClick={() => void addSample(s.kind)}
-                  className="group/sample inline-flex h-9 items-center gap-1.5 rounded-full border border-border/70 bg-background/60 px-3 text-xs font-medium text-foreground/80 shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/50 hover:bg-primary/10 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
-                >
-                  <Sparkles className="h-3.5 w-3.5 text-primary/70 transition-colors group-hover/sample:text-primary" aria-hidden />
-                  {s.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        </>
+        <div className="mt-2 flex flex-wrap items-center justify-center gap-1.5 text-[10px] text-muted-foreground">
+          {['JPEG', 'PNG', 'WebP', 'AVIF', 'GIF', 'BMP', 'HEIC', 'TIFF'].map((f) => (
+            <span key={f} className="rounded-md border border-border/60 bg-background/50 px-1.5 py-0.5 font-mono">
+              {f}
+            </span>
+          ))}
+        </div>
       )}
+
+      <div className="mt-3 flex flex-col items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+        {!hasItems && (
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground/70">No image handy? Try a sample</p>
+        )}
+        <div className="flex flex-wrap items-center justify-center gap-1.5">
+          {hasItems && (
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground/60">Samples</span>
+          )}
+          {SAMPLES.map((s) => (
+            <button
+              key={s.kind}
+              type="button"
+              title={s.hint}
+              aria-label={`Generate a sample ${s.label.toLowerCase()} image`}
+              onClick={() => void addSample(s.kind)}
+              className={cn(
+                'group/sample inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-background/60 font-medium text-foreground/80 shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/50 hover:bg-primary/10 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50',
+                hasItems ? 'h-6 px-2 text-[10px]' : 'h-9 px-3 text-xs'
+              )}
+            >
+              <Sparkles className={cn('text-primary/70 transition-colors group-hover/sample:text-primary', hasItems ? 'h-3 w-3' : 'h-3.5 w-3.5')} aria-hidden />
+              {s.label}
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

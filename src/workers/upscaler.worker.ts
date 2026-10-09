@@ -338,7 +338,7 @@ function dbg(text: string) {
 }
 
 async function handleUpscale(msg: Extract<WorkerInMessage, { type: 'upscale' }>) {
-  const { id, bitmap, scale, preset, format, quality, denoise, sharpen, exif } = msg;
+  const { id, bitmap, scale, preset, format, quality, denoise, sharpen, exif, targetSide } = msg;
   const t0 = performance.now();
   dbg(`job ${id.slice(0, 6)} start ${bitmap.width}x${bitmap.height} ${preset}:${scale}`);
   const ac = new AbortController();
@@ -465,6 +465,12 @@ async function handleUpscale(msg: Extract<WorkerInMessage, { type: 'upscale' }>)
       const data = await slice.data();
       rgbOut.set(data as Float32Array, y0 * w2 * 3);
       slice.dispose();
+      if (s < strips - 1) {
+        // yield a real idle frame between strips — keeps the GPU command
+        // queue fully drained before the next readPixels (software
+        // renderers wedge when reads stack up)
+        await tf.nextFrame();
+      }
       if (strips > 1) {
         postPhase(id, `Finalizing ${Math.round(((s + 1) / strips) * 100)}%`);
         // strips also feed the stall watchdog via the phase handler
@@ -514,28 +520,69 @@ async function handleUpscale(msg: Extract<WorkerInMessage, { type: 'upscale' }>)
       }
     }
 
-    // Optional post-pass: unsharp mask for extra perceived detail
-    if (sharpen) {
-      postPhase(id, 'Sharpening');
-      const tS = performance.now();
-      unsharpMask(rgba, w2, h2);
-      dbg(`job ${id.slice(0, 6)} sharpen ${Math.round(performance.now() - tS)}ms`);
-    }
-
     const outCanvas = new OffscreenCanvas(w2, h2);
     const outCtx = outCanvas.getContext('2d');
     if (!outCtx) throw new Error('OffscreenCanvas unavailable');
     outCtx.putImageData(new ImageData(rgba, w2, h2), 0, 0);
 
+    // Target mode: the AI ran at or above the requested resolution — resize
+    // down to the exact longest side now. Stepped halving keeps detail crisp
+    // (a single big drawImage skips over intermediate pixels).
+    let encW = w2;
+    let encH = h2;
     let encodeCanvas: OffscreenCanvas = outCanvas;
+    if (targetSide && targetSide < Math.max(w2, h2)) {
+      postPhase(id, 'Resizing');
+      const k = targetSide / Math.max(w2, h2);
+      encW = Math.max(1, Math.round(w2 * k));
+      encH = Math.max(1, Math.round(h2 * k));
+      let cur = outCanvas;
+      let cw = w2;
+      let ch = h2;
+      // halve while we are still more than 2× above the destination
+      while (cw / 2 >= encW && ch / 2 >= encH && cw > 2 && ch > 2) {
+        const nw = Math.max(1, Math.floor(cw / 2));
+        const nh = Math.max(1, Math.floor(ch / 2));
+        const step = new OffscreenCanvas(nw, nh);
+        const sCtx = step.getContext('2d');
+        if (!sCtx) break;
+        sCtx.imageSmoothingEnabled = true;
+        sCtx.imageSmoothingQuality = 'high';
+        sCtx.drawImage(cur, 0, 0, nw, nh);
+        cur = step;
+        cw = nw;
+        ch = nh;
+      }
+      const resized = new OffscreenCanvas(encW, encH);
+      const rCtx = resized.getContext('2d');
+      if (!rCtx) throw new Error('OffscreenCanvas unavailable');
+      rCtx.imageSmoothingEnabled = true;
+      rCtx.imageSmoothingQuality = 'high';
+      rCtx.drawImage(cur, 0, 0, encW, encH);
+      encodeCanvas = resized;
+    }
+
+    // Optional post-pass: unsharp mask for extra perceived detail — applied
+    // at the FINAL resolution so crispness matches what is saved
+    if (sharpen) {
+      postPhase(id, 'Sharpening');
+      const tS = performance.now();
+      const sData = encodeCanvas.getContext('2d')?.getImageData(0, 0, encW, encH);
+      if (sData) {
+        unsharpMask(sData.data, encW, encH);
+        encodeCanvas.getContext('2d')?.putImageData(sData, 0, 0);
+      }
+      dbg(`job ${id.slice(0, 6)} sharpen ${Math.round(performance.now() - tS)}ms`);
+    }
+
     if (format === 'jpeg' && hasAlpha) {
       // JPEG has no alpha — flatten over white instead of black.
-      const flat = new OffscreenCanvas(w2, h2);
+      const flat = new OffscreenCanvas(encW, encH);
       const fCtx = flat.getContext('2d');
       if (fCtx) {
         fCtx.fillStyle = '#ffffff';
-        fCtx.fillRect(0, 0, w2, h2);
-        fCtx.drawImage(outCanvas, 0, 0);
+        fCtx.fillRect(0, 0, encW, encH);
+        fCtx.drawImage(encodeCanvas, 0, 0);
         encodeCanvas = flat;
       }
     }
@@ -556,8 +603,8 @@ async function handleUpscale(msg: Extract<WorkerInMessage, { type: 'upscale' }>)
         type: 'done',
         id,
         blob,
-        width: w2,
-        height: h2,
+        width: encW,
+        height: encH,
         ms: performance.now() - t0,
       }
     );

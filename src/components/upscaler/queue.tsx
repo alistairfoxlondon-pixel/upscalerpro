@@ -220,7 +220,7 @@ function ItemActions({ item }: { item: QueueItem }) {
             onClick={() => {
               void (async () => {
                 const blob = await (await fetch(r.url)).blob();
-                downloadBlob(blob, resultFilename(item.name, r.scale, r.format));
+                downloadBlob(blob, resultFilename(item.name, r.scale, r.format, r.target));
               })();
             }}
           >
@@ -324,7 +324,7 @@ function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
                 {r.format.toUpperCase()}
               </span>
               <span className="bg-primary px-1 py-px font-mono text-[9px] font-semibold text-primary-foreground">
-                {r.scale}×
+                {r.target ? `${r.target}px` : `${r.scale}×`}
               </span>
             </span>
           )}
@@ -418,7 +418,7 @@ function QueueCard({ item, index }: { item: QueueItem; index: number }) {
         {r && (
           <span className="absolute left-1.5 top-1.5 flex items-center gap-1">
             <span className="rounded-md bg-primary px-1.5 py-px font-mono text-[9px] font-semibold text-primary-foreground shadow-sm">
-              {r.scale}×
+              {r.target ? `${r.target}px` : `${r.scale}×`}
             </span>
             <span className="rounded-md bg-black/60 px-1 py-px font-mono text-[9px] font-semibold text-white backdrop-blur-sm">
               {r.format.toUpperCase()}

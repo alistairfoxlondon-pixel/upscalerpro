@@ -3,6 +3,7 @@
 import * as React from 'react';
 import { Minus, Plus, Maximize, Scan } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useRememberedZoom, MIN_ZOOM, MAX_ZOOM } from './use-remembered-zoom';
 
 interface CompareSideBySideProps {
   beforeSrc: string;
@@ -12,9 +13,6 @@ interface CompareSideBySideProps {
   afterLabel?: string;
   className?: string;
 }
-
-const MIN_ZOOM = 1;
-const MAX_ZOOM = 6;
 
 /**
  * Side-by-side comparison with pixel-locked sync: both panes share one
@@ -29,11 +27,12 @@ export function CompareSideBySide({
   afterLabel = 'After',
   className,
 }: CompareSideBySideProps) {
+  const { initialZoom, persistZoom } = useRememberedZoom();
   const wrapRef = React.useRef<HTMLDivElement>(null);
-  const [zoom, setZoom] = React.useState(1);
+  const [zoom, setZoom] = React.useState(initialZoom);
   const [pan, setPan] = React.useState({ x: 0, y: 0 });
 
-  const zoomRef = React.useRef(1);
+  const zoomRef = React.useRef(initialZoom());
   const panRef = React.useRef({ x: 0, y: 0 });
   const mode = React.useRef<'pan' | 'pinch' | null>(null);
   const lastPan = React.useRef({ x: 0, y: 0 });
@@ -46,11 +45,12 @@ export function CompareSideBySide({
   } | null>(null);
 
   React.useEffect(() => {
-    zoomRef.current = 1;
+    const z = initialZoom();
+    zoomRef.current = z;
     panRef.current = { x: 0, y: 0 };
-    setZoom(1);
+    setZoom(z);
     setPan({ x: 0, y: 0 });
-  }, [beforeSrc, afterSrc]);
+  }, [beforeSrc, afterSrc, initialZoom]);
 
   const clampPan = React.useCallback((x: number, y: number, z: number) => {
     const el = wrapRef.current;
@@ -88,8 +88,9 @@ export function CompareSideBySide({
       panRef.current = nextPan;
       setZoom(next);
       setPan(nextPan);
+      persistZoom(next);
     },
-    [clampPan]
+    [clampPan, persistZoom]
   );
 
   React.useEffect(() => {
@@ -152,6 +153,7 @@ export function CompareSideBySide({
         panRef.current = next;
         setZoom(nextZoom);
         setPan(next);
+        persistZoom(nextZoom);
       }
       return;
     }

@@ -25,6 +25,10 @@ const faqs = [
     a: 'Outputs are capped at 8192 px per side (~34 MP) to keep your device stable. If the chosen scale would exceed that, PixelForge automatically applies the largest safe scale and tells you — this also applies to 8×, which needs a small source image (roughly under 0.5 MP). Very large inputs (>40 MP) are rejected with a clear message.',
   },
   {
+    q: 'How does “Target” size mode work?',
+    a: 'Switch “Output size” to Target and pick a longest side (HD 1280, Full-HD 1920, 2K, 4K, or any custom value). PixelForge picks the right AI scale for each image automatically — always running at or above your target — then finishes with a high-quality resize so the longest side lands exactly there. Perfect for screenshots or thumbnails that need precise dimensions; use Factor mode for classic 2×/4× enlargement.',
+  },
+  {
     q: 'How good is the quality compared to online tools?',
     a: 'PixelForge uses ESRGAN — the same family of open-source super-resolution models used by many desktop and cloud tools. Balanced mode gives excellent results on photos and game assets; Studio mode recovers the most detail at the cost of speed. The Enhance controls add a median noise-cleanup pre-pass and an unsharp-mask finishing pass for grainy or pixelated sources.',
   },

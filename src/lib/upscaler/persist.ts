@@ -43,6 +43,8 @@ export interface PersistedResult {
     preset: PresetId;
     format: OutputFormat;
     clamped: boolean;
+    /** target-mode: exact longest side the output was sized to */
+    target?: number;
   };
   savedAt: number;
 }
