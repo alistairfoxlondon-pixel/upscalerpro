@@ -154,6 +154,92 @@ function postProgress(id: string, rate: number) {
   }
 }
 
+function postPhase(id: string, phase: string) {
+  post({ type: 'phase', id, phase });
+}
+
+/* ---------------- pixel enhancement passes ---------------- */
+
+/**
+ * 3×3 median filter — removes salt/pepper noise and JPEG/pixel artifacts
+ * before super-resolution. Alpha channel is passed through untouched.
+ */
+function medianFilter3(px: Uint8ClampedArray, w: number, h: number): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(px.length);
+  const win = new Uint8Array(9);
+  for (let y = 0; y < h; y++) {
+    const y0 = y > 0 ? y - 1 : 0;
+    const y2 = y < h - 1 ? y + 1 : h - 1;
+    for (let x = 0; x < w; x++) {
+      const x0 = x > 0 ? x - 1 : 0;
+      const x2 = x < w - 1 ? x + 1 : w - 1;
+      const i = (y * w + x) * 4;
+      for (let c = 0; c < 3; c++) {
+        win[0] = px[(y0 * w + x0) * 4 + c];
+        win[1] = px[(y0 * w + x) * 4 + c];
+        win[2] = px[(y0 * w + x2) * 4 + c];
+        win[3] = px[(y * w + x0) * 4 + c];
+        win[4] = px[i + c];
+        win[5] = px[(y * w + x2) * 4 + c];
+        win[6] = px[(y2 * w + x0) * 4 + c];
+        win[7] = px[(y2 * w + x) * 4 + c];
+        win[8] = px[(y2 * w + x2) * 4 + c];
+        for (let a = 1; a < 9; a++) {
+          const v = win[a];
+          let b = a - 1;
+          while (b >= 0 && win[b] > v) {
+            win[b + 1] = win[b];
+            b--;
+          }
+          win[b + 1] = v;
+        }
+        out[i + c] = win[4];
+      }
+      out[i + 3] = px[i + 3];
+    }
+  }
+  return out;
+}
+
+/**
+ * Unsharp mask (3×3 gaussian, separable) — crisps fine detail after the
+ * neural upscale without halos on flat areas (thresholded).
+ */
+function unsharpMask(rgba: Uint8ClampedArray, w: number, h: number, amount = 0.6, threshold = 2) {
+  const blur = new Float32Array(rgba.length);
+  // horizontal [1 2 1]
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const xm = x > 0 ? x - 1 : 0;
+      const xp = x < w - 1 ? x + 1 : w - 1;
+      const i = (y * w + x) * 4;
+      const im = (y * w + xm) * 4;
+      const ip = (y * w + xp) * 4;
+      blur[i] = (rgba[im] + 2 * rgba[i] + rgba[ip]) / 4;
+      blur[i + 1] = (rgba[im + 1] + 2 * rgba[i + 1] + rgba[ip + 1]) / 4;
+      blur[i + 2] = (rgba[im + 2] + 2 * rgba[i + 2] + rgba[ip + 2]) / 4;
+    }
+  }
+  // vertical [1 2 1] + blend, in place on rgba
+  for (let y = 0; y < h; y++) {
+    const ym = y > 0 ? y - 1 : 0;
+    const yp = y < h - 1 ? y + 1 : h - 1;
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      const im = (ym * w + x) * 4;
+      const ip = (yp * w + x) * 4;
+      for (let c = 0; c < 3; c++) {
+        const b = (blur[im + c] + 2 * blur[i + c] + blur[ip + c]) / 4;
+        const diff = rgba[i + c] - b;
+        if (diff > threshold || diff < -threshold) {
+          const v = rgba[i + c] + amount * diff;
+          rgba[i + c] = v < 0 ? 0 : v > 255 ? 255 : v;
+        }
+      }
+    }
+  }
+}
+
 async function upscaleRgbTensor(upscaler: UpscalerInstance, input: tf.Tensor4D, id: string, signal: AbortSignal): Promise<tf.Tensor3D> {
   return (await upscaler.execute(input, {
     output: 'tensor' as const,
@@ -181,7 +267,7 @@ function dbg(text: string) {
 }
 
 async function handleUpscale(msg: Extract<WorkerInMessage, { type: 'upscale' }>) {
-  const { id, bitmap, scale, preset, format, quality } = msg;
+  const { id, bitmap, scale, preset, format, quality, denoise, sharpen } = msg;
   const t0 = performance.now();
   dbg(`job ${id.slice(0, 6)} start ${bitmap.width}x${bitmap.height} ${preset}:${scale}`);
   const ac = new AbortController();
@@ -210,6 +296,17 @@ async function handleUpscale(msg: Extract<WorkerInMessage, { type: 'upscale' }>)
     srcCtx.drawImage(bitmap, 0, 0);
     bitmap.close();
     const imageData = srcCtx.getImageData(0, 0, w, h);
+
+    // Optional pre-pass: median denoise (cheap artifact/noise cleanup)
+    if (denoise > 0) {
+      postPhase(id, 'Cleaning noise');
+      const tD = performance.now();
+      imageData.data.set(medianFilter3(imageData.data, w, h));
+      if (denoise > 1) {
+        imageData.data.set(medianFilter3(imageData.data, w, h));
+      }
+      dbg(`job ${id.slice(0, 6)} denoise x${denoise} ${Math.round(performance.now() - tD)}ms`);
+    }
 
     // Alpha detection + RGBA → RGB float tensor
     const px = imageData.data;
@@ -284,6 +381,14 @@ async function handleUpscale(msg: Extract<WorkerInMessage, { type: 'upscale' }>)
           }
         }
       }
+    }
+
+    // Optional post-pass: unsharp mask for extra perceived detail
+    if (sharpen) {
+      postPhase(id, 'Sharpening');
+      const tS = performance.now();
+      unsharpMask(rgba, w2, h2);
+      dbg(`job ${id.slice(0, 6)} sharpen ${Math.round(performance.now() - tS)}ms`);
     }
 
     const outCanvas = new OffscreenCanvas(w2, h2);

@@ -38,3 +38,15 @@ export function postToWorker(msg: WorkerInMessage, transfer?: Transferable[]) {
   if (transfer) w.postMessage(msg, transfer);
   else w.postMessage(msg);
 }
+
+/**
+ * Hard-resets the worker (e.g. after a GPU readback stall). A hung task would
+ * otherwise block the worker's internal job chain forever; terminating gives
+ * every queued item a clean slate — models reload on demand.
+ */
+export function resetWorker() {
+  if (worker) {
+    worker.terminate();
+    worker = null;
+  }
+}

@@ -26,7 +26,11 @@ const faqs = [
   },
   {
     q: 'How good is the quality compared to online tools?',
-    a: 'PixelForge uses ESRGAN — the same family of open-source super-resolution models used by many desktop and cloud tools. Balanced mode gives excellent results on photos and game assets; Studio mode recovers the most detail at the cost of speed.',
+    a: 'PixelForge uses ESRGAN — the same family of open-source super-resolution models used by many desktop and cloud tools. Balanced mode gives excellent results on photos and game assets; Studio mode recovers the most detail at the cost of speed. The Enhance controls add a median noise-cleanup pre-pass and an unsharp-mask finishing pass for grainy or pixelated sources.',
+  },
+  {
+    q: 'Does it remember my settings?',
+    a: 'Yes — your engine, scale, format and enhance choices are stored locally in your browser (localStorage). Nothing about you or your images ever syncs anywhere.',
   },
 ];
 

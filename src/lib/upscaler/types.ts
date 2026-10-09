@@ -31,6 +31,10 @@ export interface WorkerRequest {
   preset: PresetId;
   format: OutputFormat;
   quality: number;
+  /** 0 = off, 1 = light median pre-pass, 2 = strong (two passes) */
+  denoise: 0 | 1 | 2;
+  /** unsharp-mask post-pass on the upscaled output */
+  sharpen: boolean;
   /** force a specific tfjs backend (used by the stall watchdog to retry on CPU) */
   backendHint?: 'webgl' | 'cpu';
 }
@@ -45,6 +49,7 @@ export type ModelStatus = 'loading' | 'ready' | 'error';
 export type WorkerOutMessage =
   | { type: 'backend'; backend: string }
   | { type: 'debug'; text: string }
+  | { type: 'phase'; id: string; phase: string }
   | { type: 'model-status'; preset: PresetId; scale: ScaleFactor; status: ModelStatus; message?: string }
   | { type: 'progress'; id: string; rate: number }
   | { type: 'done'; id: string; blob: Blob; width: number; height: number; ms: number }

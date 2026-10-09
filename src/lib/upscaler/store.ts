@@ -1,6 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import { decodeImageFile } from './decode';
 import { MAX_BATCH_FILES, MAX_INPUT_PIXELS, extForFormat, resolveFormat, resolveScale } from './registry';
 import type {
@@ -12,7 +13,7 @@ import type {
 } from './types';
 import { formatBytes } from './utils';
 import { makePreviewUrl, makeThumbUrl } from './utils';
-import { onWorkerMessage, postToWorker } from './worker-client';
+import { onWorkerMessage, postToWorker, resetWorker } from './worker-client';
 
 export type ItemStatus = 'queued' | 'processing' | 'done' | 'error' | 'canceled';
 
@@ -51,7 +52,20 @@ export interface Settings {
   scale: ScaleFactor;
   format: FormatChoice;
   jpegQuality: number;
+  /** 0 = off, 1 = light median denoise, 2 = strong */
+  denoise: 0 | 1 | 2;
+  /** unsharp-mask sharpening after upscale */
+  sharpen: boolean;
 }
+
+export const DEFAULT_SETTINGS: Settings = {
+  preset: 'balanced',
+  scale: 4,
+  format: 'auto',
+  jpegQuality: 0.92,
+  denoise: 0,
+  sharpen: false,
+};
 
 export interface Totals {
   images: number;
@@ -91,7 +105,7 @@ interface UpscalerState {
 let workerWired = false;
 const pending = new Map<string, { resolve: () => void }>();
 const stallTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const STALL_TIMEOUT_MS = 240_000;
+const STALL_TIMEOUT_MS = 300_000;
 let loopRunning = false;
 
 function touchStall(id: string) {
@@ -116,7 +130,6 @@ async function onStall(id: string) {
   if (!pending.has(id)) return;
   const item = useStore.getState().items.find((i) => i.id === id);
   if (!item) return;
-  postToWorker({ type: 'cancel', id });
   const { toast } = await import('sonner');
   if (item.cpuRetry) {
     console.error('[pixelforge] processing stalled even on CPU fallback', id);
@@ -130,7 +143,10 @@ async function onStall(id: string) {
     pending.delete(id);
     return;
   }
-  toast.info('Graphics engine stalled — retrying on CPU (slower but reliable)');
+  // The GPU readback is wedged — a cancel cannot unblock the worker's job
+  // chain, so terminate it and give the retry a fresh worker + CPU backend.
+  toast.info('Graphics engine stalled — restarting worker and retrying on CPU (slower but reliable)');
+  resetWorker();
   patchItem(id, {
     cpuRetry: true,
     status: 'queued',
@@ -159,6 +175,12 @@ function wireWorker() {
         break;
       case 'debug':
         console.info('[pf-worker]', m.text);
+        break;
+      case 'phase':
+        if (pending.has(m.id)) {
+          touchStall(m.id);
+          patchItem(m.id, { phase: m.phase });
+        }
         break;
       case 'model-status': {
         const key = `${m.preset}:${m.scale}`;
@@ -254,7 +276,7 @@ async function processItem(id: string): Promise<void> {
   const state = useStore.getState();
   const item = state.items.find((i) => i.id === id);
   if (!item) return;
-  const { preset, scale, format, jpegQuality } = state.settings;
+  const { preset, scale, format, jpegQuality, denoise, sharpen } = state.settings;
 
   patchItem(id, { status: 'processing', progress: 0, phase: 'Preparing', error: undefined });
   useStore.setState({ activeId: id });
@@ -304,6 +326,8 @@ async function processItem(id: string): Promise<void> {
         preset,
         format: resolved,
         quality: jpegQuality,
+        denoise,
+        sharpen,
         backendHint: item.cpuRetry ? 'cpu' : undefined,
       },
       [bitmap]
@@ -349,9 +373,11 @@ const initialTotals: Totals = {
   bytesOut: 0,
 };
 
-export const useStore = create<UpscalerState>((set, get) => ({
+export const useStore = create<UpscalerState>()(
+  persist(
+    (set, get) => ({
   items: [],
-  settings: { preset: 'balanced', scale: 4, format: 'auto', jpegQuality: 0.92 },
+  settings: { ...DEFAULT_SETTINGS },
   busy: false,
   paused: false,
   activeId: null,
@@ -505,7 +531,26 @@ export const useStore = create<UpscalerState>((set, get) => ({
   },
 
   setCompare: (id) => set({ compareId: id }),
-}));
+    }),
+    {
+      name: 'pixelforge-settings',
+      version: 1,
+      // persist only user preferences — never queue items (blob URLs die anyway)
+      partialize: (s) => ({ settings: s.settings }) as unknown as UpscalerState,
+      // hydration is triggered manually from <Workspace /> after mount so the
+      // server-rendered markup never mismatches
+      skipHydration: true,
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<UpscalerState>;
+        return {
+          ...current,
+          ...p,
+          settings: { ...DEFAULT_SETTINGS, ...(p.settings ?? {}) },
+        };
+      },
+    }
+  )
+);
 
 /* ------------------------------------------------------------------ */
 /* Download helpers (kept near the store so components stay dumb)      */

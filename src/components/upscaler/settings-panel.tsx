@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Zap, Gauge, Crown, AlertTriangle, Check } from 'lucide-react';
+import { Zap, Gauge, Crown, AlertTriangle, Check, Wand2, Sparkles } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Slider } from '@/components/ui/slider';
@@ -131,6 +131,50 @@ export function SettingsPanel() {
                 : settings.format === 'png'
                   ? 'PNG is lossless and keeps transparency.'
                   : 'WebP balances quality and file size, keeps transparency.'}
+          </p>
+        </div>
+
+        {/* Enhance */}
+        <div className="space-y-2">
+          <span className="text-xs font-medium text-muted-foreground">Enhance</span>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="rounded-lg border p-2.5">
+              <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium">
+                <Wand2 className="h-3.5 w-3.5 text-primary" aria-hidden />
+                Noise cleanup
+              </div>
+              <ToggleGroup
+                type="single"
+                value={String(settings.denoise)}
+                onValueChange={(v) => v && setSettings({ denoise: Number(v) as 0 | 1 | 2 })}
+                className="w-full gap-1"
+              >
+                <ToggleGroupItem value="0" aria-label="Noise cleanup off" className="h-7 flex-1 rounded-md border text-[11px] data-[state=on]:border-primary data-[state=on]:bg-primary/10">Off</ToggleGroupItem>
+                <ToggleGroupItem value="1" aria-label="Light noise cleanup" className="h-7 flex-1 rounded-md border text-[11px] data-[state=on]:border-primary data-[state=on]:bg-primary/10">Light</ToggleGroupItem>
+                <ToggleGroupItem value="2" aria-label="Strong noise cleanup" className="h-7 flex-1 rounded-md border text-[11px] data-[state=on]:border-primary data-[state=on]:bg-primary/10">Strong</ToggleGroupItem>
+              </ToggleGroup>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={settings.sharpen}
+              onClick={() => setSettings({ sharpen: !settings.sharpen })}
+              className={cn(
+                'rounded-lg border p-2.5 text-left transition-colors',
+                settings.sharpen ? 'border-primary bg-primary/10' : 'hover:bg-muted/40'
+              )}
+            >
+              <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium">
+                <Sparkles className={cn('h-3.5 w-3.5', settings.sharpen ? 'text-primary' : 'text-muted-foreground')} aria-hidden />
+                Detail sharpen
+              </div>
+              <div className={cn('text-[11px]', settings.sharpen ? 'text-primary' : 'text-muted-foreground')}>
+                {settings.sharpen ? 'On — crisp edges' : 'Off'}
+              </div>
+            </button>
+          </div>
+          <p className="text-[11px] leading-snug text-muted-foreground">
+            Noise cleanup removes grain &amp; pixel artifacts before the AI pass; sharpening adds crispness after.
           </p>
         </div>
 

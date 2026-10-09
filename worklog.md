@@ -65,3 +65,25 @@ Stage Summary:
 - eslint 0 problems · tsc 0 errors · dev.log clean
 - Vercel-ready: 100% client-side, no APIs, no DB, weights self-hosted in public/models (~15MB) + CDN fallback for Studio (~29MB)
 - Known limits (documented in FAQ): 8192px/34MP output cap, 40MP input cap, 50-file batch, software-GL slowness (headless CI)
+
+---
+Task ID: 5
+Agent: cron-review-agent (round 2)
+Task: QA re-check, enhance features, persistence, PWA, styling detail pass
+
+Work Log:
+- QA re-check: tsc/lint clean, page renders error-free; established the app was stable before feature work.
+- FEATURE: Enhance controls in settings — "Noise cleanup" (Off/Light/Strong = 1-2× 3×3 median pre-pass on ImageData before the AI call) and "Detail sharpen" (thresholded unsharp-mask post-pass on upscaled RGBA). Implemented in worker (typed-array passes, alpha untouched, debug timings); wired through Settings/WorkerRequest; new worker→main `{type:'phase'}` messages give live "Cleaning noise" / "Sharpening" phases. Verified in browser: "denoise x2 8ms" debug line, job Done 18.9s with both passes active, ZIP export ok.
+- Evaluated + REJECTED @upscalerjs/maxim-denoising: 113 MB fp32 weights — impractical for browser; uninstalled.
+- BUG #3 FIXED: stall watchdog cancel could not unblock the worker's serialized chain when a GPU readback wedged AFTER execute completed (data() has no abort signal) — the CPU retry never started and timed out. Fix: onStall now terminates & respawns the worker (resetWorker in worker-client; fresh worker re-receives origin init) and requeues the item once with backendHint:'cpu'; second stall → clear actionable error. Verified: watchdog fired → requeue happened (CPU retry path exercised; SwiftShader CPU too slow for medium → clean final error message, exactly as designed).
+- STALL_TIMEOUT raised 240s→300s (avoids false positives during slow Studio downloads / slow legit reads).
+- FEATURE: settings persistence — zustand persist ('pixelforge-settings', partialize→settings only, skipHydration + manual rehydrate in Workspace useEffect, merge sanitizes with DEFAULT_SETTINGS). Verified: engine/scale/format/denoise/sharpen survive reload.
+- FEATURE: PWA-lite — public/manifest.webmanifest + icon-192/512.png (PIL-generated), sw.js (cache-first /models/* → true offline models; cache-first hashed assets; network-first documents; prod-only registration via PwaRegister). Manifest + appleWebApp meta wired in layout.
+- STYLING: per-item SVG progress ring around thumbnails (+ blur/dim on thumb while processing), barber-pole stripes on active progress bars (.pf-stripes), animated conic-gradient border on dropzone drag (.pf-drag), count-up animation on session stats, queue item hover elevation + done-state animate-in, "local only" chip in session card.
+- FAQ updated (enhance + settings-memory answers); features copy unchanged.
+
+Stage Summary:
+- eslint 0 · tsc 0 · fresh page load: zero console errors · all QA flows green (enhanced sample, compare modal, ZIP)
+- New capabilities this round: noise cleanup, detail sharpening, remembered settings, installable/offline-capable PWA shell, richer processing UI
+- Recovery stack now: awaitNextFrame (queue-depth fix) → phase messages → 300s stall watchdog → worker restart + CPU retry → clear error with guidance
+- Risks/next: CPU fallback is very slow on huge images (documented in error copy); Studio (29MB) first-load UX could use a download progress bar (tfjs loadLayersModel has no progress hook without patching); compare-modal zoom/pan still open as a future nicety; consider IndexedDB model caching if SW cache eviction becomes an issue.

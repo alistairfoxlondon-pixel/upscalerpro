@@ -6,27 +6,84 @@ import { Dropzone } from './dropzone';
 import { SettingsPanel } from './settings-panel';
 import { Queue } from './queue';
 import { CompareModal } from './compare-modal';
-import { formatMP } from '@/lib/upscaler/utils';
+
+/** Smoothly animates a number toward its target value. */
+function useCountUp(target: number, duration = 500): number {
+  const [value, setValue] = React.useState(target);
+  const fromRef = React.useRef(target);
+  React.useEffect(() => {
+    const from = fromRef.current;
+    if (from === target) return;
+    let raf = 0;
+    const t0 = performance.now();
+    const tick = (t: number) => {
+      const p = Math.min(1, (t - t0) / duration);
+      const eased = 1 - (1 - p) ** 3;
+      setValue(from + (target - from) * eased);
+      if (p < 1) raf = requestAnimationFrame(tick);
+      else fromRef.current = target;
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(raf);
+      fromRef.current = target;
+    };
+  }, [target, duration]);
+  return value;
+}
+
+function formatBytes(bytes: number, digits = 1): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  const v = bytes / 1024 ** i;
+  return `${v.toFixed(i === 0 ? 0 : digits)} ${units[i]}`;
+}
+
+function formatMP(pixels: number): string {
+  if (pixels >= 1_000_000) return `${(pixels / 1_000_000).toFixed(1)}MP`;
+  if (pixels >= 1_000) return `${Math.round(pixels / 1000)}k px`;
+  return `${Math.round(pixels)} px`;
+}
 
 export function Workspace() {
   const items = useStore((s) => s.items);
   const totals = useStore((s) => s.totals);
   const hasItems = items.length > 0;
 
+  // restore persisted user settings after mount (avoids SSR mismatch)
+  React.useEffect(() => {
+    void useStore.persist.rehydrate();
+  }, []);
+
+  const animatedImages = useCountUp(totals.images);
+  const animatedPixels = useCountUp(totals.pixelsOut - totals.pixelsIn);
+
   return (
-    <section id="workspace" className="mx-auto w-full max-w-6xl scroll-mt-20 px-4 pb-16" aria-label="Upscaler workspace">
+    <section
+      id="workspace"
+      className="mx-auto w-full max-w-6xl scroll-mt-20 px-4 pb-16"
+      aria-label="Upscaler workspace"
+    >
       <div className="grid items-start gap-6 lg:grid-cols-[340px_minmax(0,1fr)]">
         <div className="space-y-4 lg:sticky lg:top-20">
           <SettingsPanel />
           {totals.images > 0 && (
-            <div className="rounded-xl border bg-card/60 p-4 text-xs text-muted-foreground">
-              <p className="mb-2 text-sm font-semibold text-foreground">Session</p>
+            <div className="rounded-xl border bg-card/60 p-4 text-xs text-muted-foreground shadow-sm">
+              <p className="mb-2.5 flex items-center justify-between text-sm font-semibold text-foreground">
+                Session
+                <span className="rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-medium text-primary">
+                  local only
+                </span>
+              </p>
               <dl className="grid grid-cols-2 gap-x-3 gap-y-2 tabular-nums">
                 <dt>Images upscaled</dt>
-                <dd className="text-right font-mono text-foreground">{totals.images}</dd>
+                <dd className="text-right font-mono text-foreground">
+                  {Math.round(animatedImages)}
+                </dd>
                 <dt>Pixels generated</dt>
                 <dd className="text-right font-mono text-foreground">
-                  {formatMP(Math.max(0, totals.pixelsOut - totals.pixelsIn))}
+                  {formatMP(Math.max(0, animatedPixels))}
                 </dd>
                 <dt>Data in / out</dt>
                 <dd className="text-right font-mono text-foreground">
@@ -46,12 +103,4 @@ export function Workspace() {
       <CompareModal />
     </section>
   );
-}
-
-function formatBytes(bytes: number, digits = 1): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
-  const v = bytes / 1024 ** i;
-  return `${v.toFixed(i === 0 ? 0 : digits)} ${units[i]}`;
 }

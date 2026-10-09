@@ -63,25 +63,55 @@ function QueueItemRow({ item }: { item: QueueItem }) {
   return (
     <li
       className={cn(
-        'group flex items-center gap-3 rounded-xl border bg-card/60 p-3 transition-colors',
-        item.status === 'processing' && 'border-primary/40 bg-primary/5',
+        'group flex items-center gap-3 rounded-xl border bg-card/60 p-3 transition-all duration-200 hover:border-primary/40 hover:bg-card hover:shadow-md',
+        item.status === 'processing' && 'border-primary/40 bg-primary/5 shadow-[0_0_24px_-12px] shadow-primary/50',
         item.status === 'error' && 'border-red-500/30'
       )}
     >
-      {/* thumbnail */}
-      <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-lg border bg-muted/40">
+      {/* thumbnail + progress ring */}
+      <div className="relative h-14 w-14 shrink-0">
+        <div className="h-full w-full overflow-hidden rounded-lg border bg-muted/40">
         {item.thumbUrl ? (
            
-          <img src={item.thumbUrl} alt="" className="h-full w-full object-cover" />
+          <img
+              src={item.thumbUrl}
+              alt=""
+              className={cn(
+                'h-full w-full object-cover transition-all duration-500',
+                item.status === 'processing' && 'scale-105 blur-[1px] brightness-90'
+              )}
+            />
         ) : (
           <div className="flex h-full w-full items-center justify-center text-muted-foreground">
             <X className="h-4 w-4" aria-hidden />
           </div>
         )}
-        {r && (
-          <span className="absolute bottom-0 right-0 rounded-tl-md bg-primary px-1 py-px font-mono text-[9px] font-semibold text-primary-foreground">
-            {r.scale}×
-          </span>
+          {r && (
+            <span className="absolute bottom-0 right-0 rounded-tl-md bg-primary px-1 py-px font-mono text-[9px] font-semibold text-primary-foreground">
+              {r.scale}×
+            </span>
+          )}
+        </div>
+        {item.status === 'processing' && (
+          <svg
+            viewBox="0 0 60 60"
+            aria-hidden
+            className="pointer-events-none absolute -inset-[3px] -rotate-90 text-primary"
+          >
+            <circle cx="30" cy="30" r="28" fill="none" stroke="currentColor" strokeOpacity="0.2" strokeWidth="3" />
+            <circle
+              cx="30"
+              cy="30"
+              r="28"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="3"
+              strokeLinecap="round"
+              strokeDasharray={2 * Math.PI * 28}
+              strokeDashoffset={2 * Math.PI * 28 * (1 - item.progress)}
+              className="transition-[stroke-dashoffset] duration-200"
+            />
+          </svg>
         )}
       </div>
 
@@ -108,7 +138,11 @@ function QueueItemRow({ item }: { item: QueueItem }) {
 
         {item.status === 'processing' && (
           <div className="mt-1.5 flex items-center gap-2">
-            <Progress value={item.progress * 100} className="h-1.5" aria-label={`${item.name} progress`} />
+            <Progress
+              value={item.progress * 100}
+              className="h-1.5 pf-stripes"
+              aria-label={`${item.name} progress`}
+            />
             <span className="w-9 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
               {Math.round(item.progress * 100)}%
             </span>

@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "@/components/upscaler/theme-provider";
+import { PwaRegister } from "@/components/upscaler/pwa-register";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -32,6 +33,13 @@ export const metadata: Metadata = {
   authors: [{ name: "PixelForge" }],
   icons: {
     icon: "/icon.svg",
+    apple: "/icon-192.png",
+  },
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    title: "PixelForge",
+    statusBarStyle: "black-translucent",
   },
   openGraph: {
     title: "PixelForge — Free Open-Source AI Image Upscaler",
@@ -67,6 +75,7 @@ export default function RootLayout({
         <ThemeProvider>
           {children}
           <Toaster position="bottom-right" richColors closeButton />
+          <PwaRegister />
         </ThemeProvider>
       </body>
     </html>

@@ -151,3 +151,80 @@
 .fancy-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* animated barber-pole stripes inside progress bars while busy */
+.pf-stripes [data-slot='progress-indicator'] {
+  background-image: linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.28) 25%,
+    transparent 25%,
+    transparent 50%,
+    rgba(255, 255, 255, 0.28) 50%,
+    rgba(255, 255, 255, 0.28) 75%,
+    transparent 75%,
+    transparent
+  );
+  background-size: 12px 12px;
+  animation: pf-stripes 0.7s linear infinite;
+}
+@keyframes pf-stripes {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 12px 0;
+  }
+}
+
+/* animated gradient ring while dragging files over the dropzone */
+@property --pf-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+.pf-drag {
+  border-color: transparent !important;
+}
+.pf-drag::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  padding: 2px;
+  background: conic-gradient(
+    from var(--pf-angle),
+    var(--primary),
+    #2dd4bf,
+    #a7f3d0,
+    var(--primary)
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+  animation: pf-rotate 1.6s linear infinite;
+}
+@keyframes pf-rotate {
+  to {
+    --pf-angle: 360deg;
+  }
+}
+
+/* soft pulsing glow behind the processing item */
+@keyframes pf-breathe {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.pf-breathe {
+  animation: pf-breathe 2.2s ease-in-out infinite;
+}
