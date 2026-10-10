@@ -1,0 +1,915 @@
+     1→     1→'use client';
+     2→     2→
+     3→     3→import { create } from 'zustand';
+     4→     4→import { persist } from 'zustand/middleware';
+     5→     5→import { decodeImageFile } from './decode';
+     6→     6→import { extractExifSegment } from './exif';
+     7→     7→import { MAX_BATCH_FILES, MAX_INPUT_PIXELS, extForFormat, resolveFormat, resolveScale, resolveScaleForTarget, type SizeFit } from './registry';
+     8→     8→import {
+     9→     9→  idbClearResults,
+    10→    10→  idbDeleteResult,
+    11→    11→  idbLoadResults,
+    12→    12→  idbPutResult,
+    13→    13→  type PersistedResult,
+    14→    14→} from './persist';
+    15→    15→import type {
+    16→    16→  FormatChoice,
+    17→    17→  OutputFormat,
+    18→    18→  PresetId,
+    19→    19→  ScaleFactor,
+    20→    20→  WorkerOutMessage,
+    21→    21→} from './types';
+    22→    22→import { formatBytes } from './utils';
+    23→    23→import type { SampleKind } from './utils';
+    24→    24→import { makePreviewUrl, makeThumbUrl } from './utils';
+    25→    25→import { onWorkerMessage, postToWorker, resetWorker } from './worker-client';
+    26→    26→
+    27→    27→export type ItemStatus = 'queued' | 'processing' | 'done' | 'error' | 'canceled';
+    28→    28→
+    29→    29→export interface ResultData {
+    30→    30→  url: string;
+    31→    31→  size: number;
+    32→    32→  w: number;
+    33→    33→  h: number;
+    34→    34→  ms: number;
+    35→    35→  scale: ScaleFactor;
+    36→    36→  preset: PresetId;
+    37→    37→  format: OutputFormat;
+    38→    38→  clamped: boolean;
+    39→    39→  /** target-mode: exact longest side the output was sized to */
+    40→    40→  target?: number;
+    41→    41→}
+    42→    42→
+    43→    43→export interface QueueItem {
+    44→    44→  id: string;
+    45→    45→  /** null for items restored from IndexedDB (original file is not kept) */
+    46→    46→  file: File | null;
+    47→    47→  name: string;
+    48→    48→  mime: string;
+    49→    49→  sizeIn: number;
+    50→    50→  w: number;
+    51→    51→  h: number;
+    52→    52→  thumbUrl: string;
+    53→    53→  originalUrl: string;
+    54→    54→  status: ItemStatus;
+    55→    55→  progress: number; // 0..1
+    56→    56→  phase: string;
+    57→    57→  error?: string;
+    58→    58→  result?: ResultData;
+    59→    59→  cpuRetry?: boolean;
+    60→    60→  /** include in ZIP export (default true) */
+    61→    61→  zip?: boolean;
+    62→    62→  /** live patch-grid completion while processing */
+    63→    63→  patch?: { cols: number; rows: number; done: number } | null;
+    64→    64→  /** true when this item was restored from a previous session */
+    65→    65→  restored?: boolean;
+    66→    66→  /** stall watchdog already gave this job one fresh-context GPU retry */
+    67→    67→  gpuRetry?: boolean;
+    68→    68→}
+    69→    69→
+    70→    70→export interface Settings {
+    71→    71→  preset: PresetId;
+    72→    72→  scale: ScaleFactor;
+    73→    73→  format: FormatChoice;
+    74→    74→  jpegQuality: number;
+    75→    75→  /** 0 = off, 1 = light median denoise, 2 = strong */
+    76→    76→  denoise: 0 | 1 | 2;
+    77→    77→  /** unsharp-mask sharpening after upscale */
+    78→    78→  sharpen: boolean;
+    79→    79→  /** queue layout preference */
+    80→    80→  queueView: 'list' | 'grid';
+    81→    81→  /** preferred compare-modal view */
+    82→    82→  compareMode: 'slider' | 'side';
+    83→    83→  /** remembered pixel-peep zoom level (restored for each comparison) */
+    84→    84→  compareZoom: number;
+    85→    85→  /** how the output size is chosen: fixed multiplier or exact longest side */
+    86→    86→  scaleMode: 'factor' | 'target';
+    87→    87→  /** target-mode: longest output side in px */
+    88→    88→  targetSide: number;
+    89→    89→  /** copy the original EXIF metadata into JPEG outputs (off = scrubbed clean) */
+    90→    90→  keepExif: boolean;
+    91→    91→}
+    92→    92→
+    93→    93→export const DEFAULT_SETTINGS: Settings = {
+    94→    94→  preset: 'balanced',
+    95→    95→  scale: 4,
+    96→    96→  format: 'auto',
+    97→    97→  jpegQuality: 0.92,
+    98→    98→  denoise: 0,
+    99→    99→  sharpen: false,
+   100→   100→  queueView: 'list',
+   101→   101→  compareMode: 'slider',
+   102→   102→  compareZoom: 1,
+   103→   103→  scaleMode: 'factor',
+   104→   104→  targetSide: 1920,
+   105→   105→  keepExif: false,
+   106→   106→};
+   107→   107→
+   108→   108→export interface Totals {
+   109→   109→  images: number;
+   110→   110→  pixelsIn: number;
+   111→   111→  pixelsOut: number;
+   112→   112→  ms: number;
+   113→   113→  bytesIn: number;
+   114→   114→  bytesOut: number;
+   115→   115→}
+   116→   116→
+   117→   117→interface UpscalerState {
+   118→   118→  items: QueueItem[];
+   119→   119→  settings: Settings;
+   120→   120→  busy: boolean;
+   121→   121→  paused: boolean;
+   122→   122→  activeId: string | null;
+   123→   123→  backend: string | null;
+   124→   124→  gpu: string | null;
+   125→   125→  modelKey: string | null;
+   126→   126→  modelStatus: 'loading' | 'ready' | 'error' | null;
+   127→   127→  modelMessage: string | null;
+   128→   128→  totals: Totals;
+   129→   129→  compareId: string | null;
+   130→   130→
+   131→   131→  addFiles: (files: File[]) => Promise<void>;
+   132→   132→  addSample: (kind?: SampleKind) => Promise<void>;
+   133→   133→  removeItem: (id: string) => void;
+   134→   134→  clearFinished: () => void;
+   135→   135→  clearAll: () => void;
+   136→   136→  retry: (id: string) => void;
+   137→   137→  setSettings: (patch: Partial<Settings>) => void;
+   138→   138→  togglePause: () => void;
+   139→   139→  setCompare: (id: string | null) => void;
+   140→   140→  toggleZip: (id: string) => void;
+   141→   141→  /** reload finished results persisted by a previous session */
+   142→   142→  restorePersisted: () => Promise<number>;
+   143→   143→}
+   144→   144→
+   145→   145→/* ------------------------------------------------------------------ */
+   146→   146→
+   147→   147→let workerWired = false;
+   148→   148→const pending = new Map<string, { resolve: () => void }>();
+   149→   149→const stallTimers = new Map<string, ReturnType<typeof setTimeout>>();
+   150→   150→const STALL_TIMEOUT_MS = 300_000;
+   151→   151→/** a fresh-context GPU retry after a Finalizing stall gets a shorter leash */
+   152→   152→const GPU_RETRY_TIMEOUT_MS = 180_000;
+   153→   153→let loopRunning = false;
+   154→   154→
+   155→   155→/* ---- patch-grid accumulation (flushed to the store at most ~8×/s) ---- */
+   156→   156→const patchAccum = new Map<string, { cols: number; rows: number; done: number }>();
+   157→   157→let patchFlushTimer: ReturnType<typeof setTimeout> | null = null;
+   158→   158→
+   159→   159→function flushPatches() {
+   160→   160→  patchFlushTimer = null;
+   161→   161→  if (!patchAccum.size) return;
+   162→   162→  const entries = [...patchAccum.entries()];
+   163→   163→  patchAccum.clear();
+   164→   164→  useStore.setState((s) => ({
+   165→   165→    items: s.items.map((it) => {
+   166→   166→      const hit = entries.find(([id]) => id === it.id);
+   167→   167→      return hit ? { ...it, patch: hit[1] } : it;
+   168→   168→    }),
+   169→   169→  }));
+   170→   170→}
+   171→   171→
+   172→   172→function queuePatchFlush() {
+   173→   173→  if (!patchFlushTimer) {
+   174→   174→    patchFlushTimer = setTimeout(flushPatches, 120);
+   175→   175→  }
+   176→   176→}
+   177→   177→
+   178→   178→function onPatch(id: string, row: number, col: number, cols: number, rows: number) {
+   179→   179→  if (!pending.has(id)) return;
+   180→   180→  const prev = patchAccum.get(id);
+   181→   181→  // a pass change (8× chain) swaps the grid dimensions — restart the count
+   182→   182→  const base = prev && prev.cols === cols && prev.rows === rows ? prev : null;
+   183→   183→  const done = Math.max(base?.done ?? 0, row * cols + col + 1);
+   184→   184→  patchAccum.set(id, { cols, rows, done });
+   185→   185→  queuePatchFlush();
+   186→   186→}
+   187→   187→
+   188→   188→function touchStall(id: string) {
+   189→   189→  const prev = stallTimers.get(id);
+   190→   190→  if (prev) clearTimeout(prev);
+   191→   191→  const item = useStore.getState().items.find((i) => i.id === id);
+   192→   192→  const timeout = item?.gpuRetry ? GPU_RETRY_TIMEOUT_MS : STALL_TIMEOUT_MS;
+   193→   193→  stallTimers.set(
+   194→   194→    id,
+   195→   195→    setTimeout(() => {
+   196→   196→      stallTimers.delete(id);
+   197→   197→      onStall(id);
+   198→   198→    }, timeout)
+   199→   199→  );
+   200→   200→}
+   201→   201→
+   202→   202→function clearStall(id: string) {
+   203→   203→  const prev = stallTimers.get(id);
+   204→   204→  if (prev) clearTimeout(prev);
+   205→   205→  stallTimers.delete(id);
+   206→   206→}
+   207→   207→
+   208→   208→async function onStall(id: string) {
+   209→   209→  if (!pending.has(id)) return;
+   210→   210→  const item = useStore.getState().items.find((i) => i.id === id);
+   211→   211→  if (!item) return;
+   212→   212→  const { toast } = await import('sonner');
+   213→   213→  if (item.cpuRetry) {
+   214→   214→    console.error('[pixelforge] processing stalled even on CPU fallback', id);
+   215→   215→    patchItem(id, {
+   216→   216→      status: 'error',
+   217→   217→      phase: 'Failed',
+   218→   218→      error: 'Processing stalled — try a smaller image or the Fast engine',
+   219→   219→      result: undefined,
+   220→   220→    });
+   221→   221→    pending.get(id)?.resolve();
+   222→   222→    pending.delete(id);
+   223→   223→    return;
+   224→   224→  }
+   225→   225→  // The GPU readback is wedged — a cancel cannot unblock the worker's job
+   226→   226→  // chain, so terminate it and give the retry a fresh worker.
+   227→   227→  if (item.gpuRetry) {
+   228→   228→    // Second stall — the fresh GPU context did not survive either. Fall back
+   229→   229→    // to the pure-JS backend: slow but deterministic.
+   230→   230→    toast.info('Graphics engine stalled again — retrying on CPU (slower but reliable)');
+   231→   231→    resetWorker();
+   232→   232→    patchItem(id, {
+   233→   233→      cpuRetry: true,
+   234→   234→      gpuRetry: false,
+   235→   235→      status: 'queued',
+   236→   236→      phase: 'Queued (CPU retry)',
+   237→   237→      progress: 0,
+   238→   238→      result: undefined,
+   239→   239→    });
+   240→   240→  } else if (/^Finalizing/i.test(item.phase)) {
+   241→   241→    // The AI pass already finished — only the GPU→CPU readback is suspect.
+   242→   242→    // A fresh WebGL context is usually healthy again, and re-running the AI
+   243→   243→    // pass is far cheaper than a full CPU inference (which can take minutes).
+   244→   244→    toast.info('Graphics engine stalled during output — retrying on a fresh GPU context');
+   245→   245→    resetWorker();
+   246→   246→    patchItem(id, {
+   247→   247→      gpuRetry: true,
+   248→   248→      status: 'queued',
+   249→   249→      phase: 'Queued (GPU retry)',
+   250→   250→      progress: 0,
+   251→   251→      result: undefined,
+   252→   252→    });
+   253→   253→  } else {
+   254→   254→    // Compute-phase stall — go straight to the reliable CPU fallback.
+   255→   255→    toast.info('Graphics engine stalled — restarting worker and retrying on CPU (slower but reliable)');
+   256→   256→    resetWorker();
+   257→   257→    patchItem(id, {
+   258→   258→      cpuRetry: true,
+   259→   259→      gpuRetry: false,
+   260→   260→      status: 'queued',
+   261→   261→      phase: 'Queued (CPU retry)',
+   262→   262→      progress: 0,
+   263→   263→      result: undefined,
+   264→   264→    });
+   265→   265→  }
+   266→   266→  pending.get(id)?.resolve();
+   267→   267→  pending.delete(id);
+   268→   268→}
+   269→   269→
+   270→   270→function patchItem(id: string, patch: Partial<QueueItem>) {
+   271→   271→  useStore.setState((s) => ({
+   272→   272→    items: s.items.map((it) => (it.id === id ? { ...it, ...patch } : it)),
+   273→   273→  }));
+   274→   274→}
+   275→   275→
+   276→   276→/**
+   277→   277→ * Persist a finished result to IndexedDB so it can be restored after a
+   278→   278→ * reload. The original is re-encoded to a capped preview; thumbnails are
+   279→   279→ * already small. Never throws.
+   280→   280→ */
+   281→   281→async function savePersisted(item: QueueItem, blob: Blob, result: ResultData) {
+   282→   282→  try {
+   283→   283→    const [thumbBlob, originalBlob] = await Promise.all([
+   284→   284→      fetch(item.thumbUrl).then((r) => r.blob()).catch(() => null),
+   285→   285→      item.originalUrl
+   286→   286→        ? makePreviewUrlFromUrl(item.originalUrl).catch(() => null)
+   287→   287→        : Promise.resolve(null),
+   288→   288→    ]);
+   289→   289→    if (!thumbBlob || !originalBlob) return;
+   290→   290→    const data: PersistedResult = {
+   291→   291→      w: item.w,
+   292→   292→      h: item.h,
+   293→   293→      sizeIn: item.sizeIn,
+   294→   294→      name: item.name,
+   295→   295→      mime: item.mime,
+   296→   296→      thumb: thumbBlob,
+   297→   297→      original: originalBlob,
+   298→   298→      result: {
+   299→   299→        blob,
+   300→   300→        w: result.w,
+   301→   301→        h: result.h,
+   302→   302→        ms: result.ms,
+   303→   303→        scale: result.scale,
+   304→   304→        preset: result.preset,
+   305→   305→        format: result.format,
+   306→   306→        clamped: result.clamped,
+   307→   307→        target: result.target,
+   308→   308→      },
+   309→   309→      savedAt: Date.now(),
+   310→   310→    };
+   311→   311→    await idbPutResult(item.id, data);
+   312→   312→  } catch {
+   313→   313→    /* best-effort */
+   314→   314→  }
+   315→   315→}
+   316→   316→
+   317→   317→/** Re-encodes any image object-URL to a ≤2048px JPEG for compact storage. */
+   318→   318→async function makePreviewUrlFromUrl(url: string, maxSide = 2048): Promise<Blob> {
+   319→   319→  const src = await createImageBitmap(await (await fetch(url)).blob());
+   320→   320→  try {
+   321→   321→    const ratio = Math.min(1, maxSide / Math.max(src.width, src.height));
+   322→   322→    const w = Math.max(1, Math.round(src.width * ratio));
+   323→   323→    const h = Math.max(1, Math.round(src.height * ratio));
+   324→   324→    const canvas = document.createElement('canvas');
+   325→   325→    canvas.width = w;
+   326→   326→    canvas.height = h;
+   327→   327→    const ctx = canvas.getContext('2d');
+   328→   328→    if (!ctx) throw new Error('Canvas unavailable');
+   329→   329→    ctx.imageSmoothingQuality = 'high';
+   330→   330→    ctx.drawImage(src, 0, 0, w, h);
+   331→   331→    const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/jpeg', 0.9));
+   332→   332→    if (!blob) throw new Error('Preview encoding failed');
+   333→   333→    return blob;
+   334→   334→  } finally {
+   335→   335→    src.close();
+   336→   336→  }
+   337→   337→}
+   338→   338→
+   339→   339→function wireWorker() {
+   340→   340→  if (workerWired) return;
+   341→   341→  workerWired = true;
+   342→   342→  onWorkerMessage((m: WorkerOutMessage) => {
+   343→   343→    const state = useStore.getState();
+   344→   344→    switch (m.type) {
+   345→   345→      case 'backend':
+   346→   346→        useStore.setState({ backend: m.backend, gpu: m.renderer ?? null });
+   347→   347→        break;
+   348→   348→      case 'debug':
+   349→   349→        console.info('[pf-worker]', m.text);
+   350→   350→        break;
+   351→   351→      case 'phase':
+   352→   352→        if (pending.has(m.id)) {
+   353→   353→          touchStall(m.id);
+   354→   354→          patchItem(m.id, { phase: m.phase });
+   355→   355→        }
+   356→   356→        break;
+   357→   357→      case 'model-status': {
+   358→   358→        const key = `${m.preset}:${m.scale}`;
+   359→   359→        if (state.modelKey === key || m.status === 'error') {
+   360→   360→          useStore.setState({ modelStatus: m.status, modelMessage: m.message ?? null });
+   361→   361→        }
+   362→   362→        if (m.status === 'loading' && state.activeId) {
+   363→   363→          patchItem(state.activeId, { phase: 'Loading AI model' });
+   364→   364→          touchStall(state.activeId);
+   365→   365→        }
+   366→   366→        if (m.status === 'ready' && state.activeId) {
+   367→   367→          const active = state.items.find((i) => i.id === state.activeId);
+   368→   368→          if (active && active.phase === 'Loading AI model') {
+   369→   369→            patchItem(active.id, { phase: 'Upscaling' });
+   370→   370→          }
+   371→   371→        }
+   372→   372→        break;
+   373→   373→      }
+   374→   374→      case 'progress':
+   375→   375→        touchStall(m.id);
+   376→   376→        patchItem(m.id, {
+   377→   377→          progress: 0.02 + m.rate * 0.93,
+   378→   378→          phase: m.rate >= 0.999 ? 'Finalizing' : 'Upscaling',
+   379→   379→        });
+   380→   380→        break;
+   381→   381→      case 'patch':
+   382→   382→        onPatch(m.id, m.row, m.col, m.cols, m.rows);
+   383→   383→        break;
+   384→   384→      case 'done': {
+   385→   385→        if (!pending.has(m.id)) break; // stale message (item re-queued or removed)
+   386→   386→        clearStall(m.id);
+   387→   387→        patchAccum.delete(m.id);
+   388→   388→        const item = state.items.find((i) => i.id === m.id);
+   389→   389→        const url = URL.createObjectURL(m.blob);
+   390→   390→        const planned = item?.result;
+   391→   391→        const result: ResultData = {
+   392→   392→          url,
+   393→   393→          size: m.blob.size,
+   394→   394→          w: m.width,
+   395→   395→          h: m.height,
+   396→   396→          ms: m.ms,
+   397→   397→          scale: (planned?.scale ?? useStore.getState().settings.scale) as ScaleFactor,
+   398→   398→          preset: (planned?.preset ?? useStore.getState().settings.preset) as PresetId,
+   399→   399→          format: m.blob.type.includes('jpeg')
+   400→   400→            ? 'jpeg'
+   401→   401→            : m.blob.type.includes('webp')
+   402→   402→              ? 'webp'
+   403→   403→              : 'png',
+   404→   404→          clamped: planned?.clamped ?? false,
+   405→   405→          target: planned?.target,
+   406→   406→        };
+   407→   407→        patchItem(m.id, {
+   408→   408→          status: 'done',
+   409→   409→          progress: 1,
+   410→   410→          phase: 'Done',
+   411→   411→          result,
+   412→   412→          patch: null,
+   413→   413→        });
+   414→   414→        useStore.setState((s) => ({
+   415→   415→          totals: {
+   416→   416→            images: s.totals.images + 1,
+   417→   417→            pixelsIn: s.totals.pixelsIn + (item ? item.w * item.h : 0),
+   418→   418→            pixelsOut: s.totals.pixelsOut + m.width * m.height,
+   419→   419→            ms: s.totals.ms + m.ms,
+   420→   420→            bytesIn: s.totals.bytesIn + (item?.sizeIn ?? 0),
+   421→   421→            bytesOut: s.totals.bytesOut + m.blob.size,
+   422→   422→          },
+   423→   423→        }));
+   424→   424→        pending.get(m.id)?.resolve();
+   425→   425→        pending.delete(m.id);
+   426→   426→        // persist the finished result so it survives a reload (best-effort)
+   427→   427→        if (item) void savePersisted(item, m.blob, result);
+   428→   428→        break;
+   429→   429→      }
+   430→   430→      case 'error': {
+   431→   431→        if (!pending.has(m.id)) break; // stale message (item re-queued or removed)
+   432→   432→        clearStall(m.id);
+   433→   433→        patchAccum.delete(m.id);
+   434→   434→        const canceled = /^canceled$/i.test(m.message);
+   435→   435→        patchItem(m.id, {
+   436→   436→          status: canceled ? 'canceled' : 'error',
+   437→   437→          phase: canceled ? 'Canceled' : 'Failed',
+   438→   438→          error: canceled ? undefined : m.message,
+   439→   439→          progress: 0,
+   440→   440→          result: undefined,
+   441→   441→        });
+   442→   442→        if (!canceled) {
+   443→   443→          console.error('[pixelforge]', m.message);
+   444→   444→          void import('sonner').then(({ toast }) =>
+   445→   445→            toast.error('Upscaling failed', { description: m.message })
+   446→   446→          );
+   447→   447→        }
+   448→   448→        pending.get(m.id)?.resolve();
+   449→   449→        pending.delete(m.id);
+   450→   450→        break;
+   451→   451→      }
+   452→   452→    }
+   453→   453→  });
+   454→   454→}
+   455→   455→
+   456→   456→async function processItem(id: string): Promise<void> {
+   457→   457→  const state = useStore.getState();
+   458→   458→  const item = state.items.find((i) => i.id === id);
+   459→   459→  if (!item) return;
+   460→   460→  if (!item.file) {
+   461→   461→    // restored items have no source file — treat as informational failure
+   462→   462→    patchItem(id, {
+   463→   463→      status: 'error',
+   464→   464→      phase: 'Failed',
+   465→   465→      error: 'Original file is not kept after a reload — add the image again',
+   466→   466→    });
+   467→   467→    return;
+   468→   468→  }
+   469→   469→  const { preset, scale, format, jpegQuality, denoise, sharpen, keepExif } = state.settings;
+   470→   470→
+   471→   471→  patchItem(id, {
+   472→   472→    status: 'processing',
+   473→   473→    progress: 0,
+   474→   474→    phase: 'Preparing',
+   475→   475→    error: undefined,
+   476→   476→    patch: null,
+   477→   477→  });
+   478→   478→  useStore.setState({ activeId: id });
+   479→   479→
+   480→   480→  const resolved: OutputFormat = format === 'auto' ? resolveFormat(item.mime, item.name) : format;
+   481→   481→
+   482→   482→  // memory safety: pick the largest allowed scale (factor mode) or the smallest
+   483→   483→  // AI scale that meets the target size, then resize (target mode)
+   484→   484→  const fit: SizeFit | null =
+   485→   485→    state.settings.scaleMode === 'target'
+   486→   486→      ? resolveScaleForTarget(item.w, item.h, state.settings.targetSide)
+   487→   487→      : resolveScale(item.w, item.h, scale);
+   488→   488→  if (!fit || fit.error) {
+   489→   489→    patchItem(id, {
+   490→   490→      status: 'error',
+   491→   491→      phase: 'Failed',
+   492→   492→      error: fit?.error ?? 'Image is too large to upscale on this device',
+   493→   493→    });
+   494→   494→    return;
+   495→   495→  }
+   496→   496→
+   497→   497→  try {
+   498→   498→    const { bitmap } = await decodeImageFile(item.file);
+   499→   499→    const modelKey = `${preset}:${fit.scale}`;
+   500→   500→    useStore.setState({ modelKey, modelStatus: null, modelMessage: null });
+   501→   501→    // planned result placeholder — carries the plan (scale/format) and
+   502→   502→    // estimated output size until the worker reports the real values
+   503→   503→    const planned: ResultData = {
+   504→   504→      url: '',
+   505→   505→      size: 0,
+   506→   506→      w: fit.outW,
+   507→   507→      h: fit.outH,
+   508→   508→      ms: 0,
+   509→   509→      scale: fit.scale,
+   510→   510→      preset,
+   511→   511→      format: resolved,
+   512→   512→      clamped: fit.clamped ?? false,
+   513→   513→      target:
+   514→   514→        state.settings.scaleMode === 'target' && !fit.short && !fit.error
+   515→   515→          ? state.settings.targetSide
+   516→   516→          : undefined,
+   517→   517→    };
+   518→   518→    patchItem(id, {
+   519→   519→      phase: 'Loading model',
+   520→   520→      progress: 0.01,
+   521→   521→      result: planned,
+   522→   522→    });
+   523→   523→    // Opt-in metadata preservation: pull the original JPEG APP1 EXIF segment
+   524→   524→    // (first 256 KB header scan — cheap) so the worker can splice it into the
+   525→   525→    // encoded output. Only meaningful for JPEG results.
+   526→   526→    const exif =
+   527→   527→      keepExif && resolved === 'jpeg' ? await extractExifSegment(item.file) : null;
+   528→   528→    const done = new Promise<void>((resolve) => pending.set(id, { resolve }));
+   529→   529→    touchStall(id);
+   530→   530→    const transfer: Transferable[] = [bitmap];
+   531→   531→    if (exif) transfer.push(exif);
+   532→   532→    postToWorker(
+   533→   533→      {
+   534→   534→        type: 'upscale',
+   535→   535→        id,
+   536→   536→        bitmap,
+   537→   537→        scale: fit.scale,
+   538→   538→        preset,
+   539→   539→        format: resolved,
+   540→   540→        quality: jpegQuality,
+   541→   541→        denoise,
+   542→   542→        sharpen,
+   543→   543→        exif: exif ?? undefined,
+   544→   544→        targetSide: planned.target,
+   545→   545→        backendHint: item.cpuRetry ? 'cpu' : undefined,
+   546→   546→      },
+   547→   547→      transfer
+   548→   548→    );
+   549→   549→    await done;
+   550→   550→    clearStall(id);
+   551→   551→  } catch (err) {
+   552→   552→    patchItem(id, {
+   553→   553→      status: 'error',
+   554→   554→      phase: 'Failed',
+   555→   555→      error: err instanceof Error ? err.message : 'Could not decode image',
+   556→   556→      result: undefined,
+   557→   557→    });
+   558→   558→  }
+   559→   559→}
+   560→   560→
+   561→   561→async function ensureLoop() {
+   562→   562→  if (loopRunning) return;
+   563→   563→  loopRunning = true;
+   564→   564→  useStore.setState({ busy: true });
+   565→   565→  let completed = 0;
+   566→   566→  try {
+   567→   567→    for (;;) {
+   568→   568→      const s = useStore.getState();
+   569→   569→      if (s.paused) break;
+   570→   570→      const next = s.items.find((i) => i.status === 'queued');
+   571→   571→      if (!next) break;
+   572→   572→      await processItem(next.id);
+   573→   573→      const after = useStore.getState().items.find((i) => i.id === next.id);
+   574→   574→      if (after?.status === 'done') completed++;
+   575→   575→    }
+   576→   576→  } finally {
+   577→   577→    loopRunning = false;
+   578→   578→    useStore.setState({ busy: false, activeId: null });
+   579→   579→    // batch-complete feedback with a one-tap ZIP export
+   580→   580→    if (completed > 0 && !useStore.getState().paused) {
+   581→   581→      const { toast } = await import('sonner');
+   582→   582→      toast.success(completed === 1 ? '1 image ready' : `${completed} images ready`, {
+   583→   583→        description: 'Processed entirely on this device.',
+   584→   584→        action: { label: 'Download ZIP', onClick: () => void downloadAllAsZip() },
+   585→   585→        duration: 10_000,
+   586→   586→      });
+   587→   587→    }
+   588→   588→  }
+   589→   589→}
+   590→   590→
+   591→   591→/* ------------------------------------------------------------------ */
+   592→   592→
+   593→   593→const initialTotals: Totals = {
+   594→   594→  images: 0,
+   595→   595→  pixelsIn: 0,
+   596→   596→  pixelsOut: 0,
+   597→   597→  ms: 0,
+   598→   598→  bytesIn: 0,
+   599→   599→  bytesOut: 0,
+   600→   600→};
+   601→   601→
+   602→   602→export const useStore = create<UpscalerState>()(
+   603→   603→  persist(
+   604→   604→    (set, get) => ({
+   605→   605→  items: [],
+   606→   606→  settings: { ...DEFAULT_SETTINGS },
+   607→   607→  busy: false,
+   608→   608→  paused: false,
+   609→   609→  activeId: null,
+   610→   610→  backend: null,
+   611→   611→  gpu: null,
+   612→   612→  modelKey: null,
+   613→   613→  modelStatus: null,
+   614→   614→  modelMessage: null,
+   615→   615→  totals: initialTotals,
+   616→   616→  compareId: null,
+   617→   617→
+   618→   618→  addFiles: async (files) => {
+   619→   619→    wireWorker();
+   620→   620→    const list = files.filter(
+   621→   621→      (f) =>
+   622→   622→        f.size > 0 &&
+   623→   623→        (f.type.startsWith('image/') || /\.(heic|heif|hif|tif|tiff|avif|webp|bmp)$/i.test(f.name))
+   624→   624→    );
+   625→   625→    if (!list.length) {
+   626→   626→      const { toast } = await import('sonner');
+   627→   627→      toast.error('No supported images found', {
+   628→   628→        description: 'Drop JPEG, PNG, WebP, AVIF, GIF, BMP, HEIC or TIFF files.',
+   629→   629→      });
+   630→   630→      return;
+   631→   631→    }
+   632→   632→    const capped = list.slice(0, MAX_BATCH_FILES);
+   633→   633→    // duplicate guard: same name + byte size already queued (or twice in this
+   634→   634→    // batch) — a re-added file would just waste GPU time on an identical job
+   635→   635→    const seen = new Set<string>();
+   636→   636→    for (const it of useStore.getState().items) {
+   637→   637→      if (it.file) seen.add(`${it.name}:${it.sizeIn}`);
+   638→   638→    }
+   639→   639→    let dupes = 0;
+   640→   640→    const items: QueueItem[] = [];
+   641→   641→    for (const file of capped) {
+   642→   642→      const key = `${file.name || 'image'}:${file.size}`;
+   643→   643→      if (seen.has(key)) {
+   644→   644→        dupes++;
+   645→   645→        continue;
+   646→   646→      }
+   647→   647→      seen.add(key);
+   648→   648→      const id = crypto.randomUUID();
+   649→   649→      const name = file.name || `image-${id.slice(0, 6)}`;
+   650→   650→      try {
+   651→   651→        const { bitmap, renderable } = await decodeImageFile(file);
+   652→   652→        const pixels = bitmap.width * bitmap.height;
+   653→   653→        if (pixels > MAX_INPUT_PIXELS) {
+   654→   654→          bitmap.close();
+   655→   655→          items.push({
+   656→   656→            id, file, name, mime: file.type || 'image/*', sizeIn: file.size,
+   657→   657→            w: 0, h: 0, thumbUrl: '', originalUrl: '',
+   658→   658→            status: 'error', progress: 0, phase: 'Failed',
+   659→   659→            error: `Image is ${Math.round(pixels / 1e6)}MP — max input is ${Math.round(MAX_INPUT_PIXELS / 1e6)}MP`,
+   660→   660→          });
+   661→   661→          continue;
+   662→   662→        }
+   663→   663→        const thumbUrl = await makeThumbUrl(bitmap);
+   664→   664→        const originalUrl = renderable ? URL.createObjectURL(file) : await makePreviewUrl(bitmap);
+   665→   665→        const w = bitmap.width;
+   666→   666→        const h = bitmap.height;
+   667→   667→        bitmap.close();
+   668→   668→        items.push({
+   669→   669→          id, file, name, mime: file.type || 'image/*', sizeIn: file.size,
+   670→   670→          w, h, thumbUrl, originalUrl,
+   671→   671→          status: 'queued', progress: 0, phase: 'Queued',
+   672→   672→        });
+   673→   673→      } catch (err) {
+   674→   674→        items.push({
+   675→   675→          id, file, name, mime: file.type || 'image/*', sizeIn: file.size,
+   676→   676→          w: 0, h: 0, thumbUrl: '', originalUrl: '',
+   677→   677→          status: 'error', progress: 0, phase: 'Failed',
+   678→   678→          error: err instanceof Error ? err.message : 'Could not decode image',
+   679→   679→        });
+   680→   680→      }
+   681→   681→    }
+   682→   682→    set((s) => ({ items: [...s.items, ...items] }));
+   683→   683→    if (dupes > 0) {
+   684→   684→      const { toast } = await import('sonner');
+   685→   685→      toast.info(`${dupes} duplicate file${dupes > 1 ? 's' : ''} skipped`, {
+   686→   686→        description: 'Already in the queue.',
+   687→   687→      });
+   688→   688→    }
+   689→   689→    const skipped = list.length - capped.length;
+   690→   690→    if (skipped > 0) {
+   691→   691→      const { toast } = await import('sonner');
+   692→   692→      toast.warning(`${skipped} file${skipped > 1 ? 's' : ''} skipped`, {
+   693→   693→        description: `Batch limit is ${MAX_BATCH_FILES} images at a time.`,
+   694→   694→      });
+   695→   695→    }
+   696→   696→    void ensureLoop();
+   697→   697→  },
+   698→   698→
+   699→   699→  addSample: async (kind: SampleKind = 'photo') => {
+   700→   700→    const { createSampleFile } = await import('./utils');
+   701→   701→    try {
+   702→   702→      const file = await createSampleFile(kind);
+   703→   703→      await get().addFiles([file]);
+   704→   704→    } catch (err) {
+   705→   705→      const { toast } = await import('sonner');
+   706→   706→      toast.error('Could not create the sample image');
+   707→   707→      console.error(err);
+   708→   708→    }
+   709→   709→  },
+   710→   710→
+   711→   711→  removeItem: (id) => {
+   712→   712→    const s = get();
+   713→   713→    const item = s.items.find((i) => i.id === id);
+   714→   714→    if (!item) return;
+   715→   715→    if (item.status === 'processing') {
+   716→   716→      postToWorker({ type: 'cancel', id });
+   717→   717→    }
+   718→   718→    if (item.thumbUrl) URL.revokeObjectURL(item.thumbUrl);
+   719→   719→    if (item.originalUrl) URL.revokeObjectURL(item.originalUrl);
+   720→   720→    if (item.result?.url) URL.revokeObjectURL(item.result.url);
+   721→   721→    void idbDeleteResult(id);
+   722→   722→    set((st) => ({
+   723→   723→      items: st.items.filter((i) => i.id !== id),
+   724→   724→      compareId: st.compareId === id ? null : st.compareId,
+   725→   725→    }));
+   726→   726→  },
+   727→   727→
+   728→   728→  clearFinished: () => {
+   729→   729→    const s = get();
+   730→   730→    for (const item of s.items) {
+   731→   731→      if (item.status === 'done' || item.status === 'canceled' || item.status === 'error') {
+   732→   732→        if (item.thumbUrl) URL.revokeObjectURL(item.thumbUrl);
+   733→   733→        if (item.originalUrl) URL.revokeObjectURL(item.originalUrl);
+   734→   734→        if (item.result?.url) URL.revokeObjectURL(item.result.url);
+   735→   735→        void idbDeleteResult(item.id);
+   736→   736→      }
+   737→   737→    }
+   738→   738→    set((st) => ({
+   739→   739→      items: st.items.filter(
+   740→   740→        (i) => i.status === 'queued' || i.status === 'processing'
+   741→   741→      ),
+   742→   742→      compareId: null,
+   743→   743→    }));
+   744→   744→  },
+   745→   745→
+   746→   746→  clearAll: () => {
+   747→   747→    const s = get();
+   748→   748→    for (const item of s.items) {
+   749→   749→      if (item.status === 'processing') {
+   750→   750→        postToWorker({ type: 'cancel', id: item.id });
+   751→   751→      }
+   752→   752→      if (item.thumbUrl) URL.revokeObjectURL(item.thumbUrl);
+   753→   753→      if (item.originalUrl) URL.revokeObjectURL(item.originalUrl);
+   754→   754→      if (item.result?.url) URL.revokeObjectURL(item.result.url);
+   755→   755→    }
+   756→   756→    void idbClearResults();
+   757→   757→    set({ items: [], compareId: null, totals: initialTotals });
+   758→   758→  },
+   759→   759→
+   760→   760→  retry: (id) => {
+   761→   761→    patchItem(id, {
+   762→   762→      status: 'queued',
+   763→   763→      progress: 0,
+   764→   764→      phase: 'Queued',
+   765→   765→      error: undefined,
+   766→   766→      result: undefined,
+   767→   767→      cpuRetry: false,
+   768→   768→      gpuRetry: false,
+   769→   769→      patch: null,
+   770→   770→    });
+   771→   771→    void ensureLoop();
+   772→   772→  },
+   773→   773→
+   774→   774→  toggleZip: (id) => {
+   775→   775→    useStore.setState((s) => ({
+   776→   776→      items: s.items.map((it) =>
+   777→   777→        it.id === id ? { ...it, zip: it.zip === false } : it
+   778→   778→      ),
+   779→   779→    }));
+   780→   780→  },
+   781→   781→
+   782→   782→  restorePersisted: async () => {
+   783→   783→    let rows: Array<PersistedResult & { id: string }> = [];
+   784→   784→    try {
+   785→   785→      rows = await idbLoadResults();
+   786→   786→    } catch {
+   787→   787→      return 0;
+   788→   788→    }
+   789→   789→    if (!rows.length) return 0;
+   790→   790→    const existing = new Set(useStore.getState().items.map((i) => i.id));
+   791→   791→    const items: QueueItem[] = [];
+   792→   792→    for (const row of rows) {
+   793→   793→      if (existing.has(row.id)) continue;
+   794→   794→      items.push({
+   795→   795→        id: row.id,
+   796→   796→        file: null,
+   797→   797→        name: row.name,
+   798→   798→        mime: row.mime,
+   799→   799→        sizeIn: row.sizeIn,
+   800→   800→        w: row.w,
+   801→   801→        h: row.h,
+   802→   802→        thumbUrl: URL.createObjectURL(row.thumb),
+   803→   803→        originalUrl: URL.createObjectURL(row.original),
+   804→   804→        status: 'done',
+   805→   805→        progress: 1,
+   806→   806→        phase: 'Done',
+   807→   807→        result: {
+   808→   808→          url: URL.createObjectURL(row.result.blob),
+   809→   809→          size: row.result.blob.size,
+   810→   810→          w: row.result.w,
+   811→   811→          h: row.result.h,
+   812→   812→          ms: row.result.ms,
+   813→   813→          scale: row.result.scale,
+   814→   814→          preset: row.result.preset,
+   815→   815→          format: row.result.format,
+   816→   816→          clamped: row.result.clamped,
+   817→   817→          target: row.result.target,
+   818→   818→        },
+   819→   819→        restored: true,
+   820→   820→      });
+   821→   821→    }
+   822→   822→    if (items.length) {
+   823→   823→      set((s) => ({ items: [...items, ...s.items] }));
+   824→   824→    }
+   825→   825→    return items.length;
+   826→   826→  },
+   827→   827→
+   828→   828→  setSettings: (patch) => {
+   829→   829→    set((s) => ({ settings: { ...s.settings, ...patch } }));
+   830→   830→  },
+   831→   831→
+   832→   832→  togglePause: () => {
+   833→   833→    const wasPaused = get().paused;
+   834→   834→    set({ paused: !wasPaused });
+   835→   835→    if (wasPaused) void ensureLoop();
+   836→   836→  },
+   837→   837→
+   838→   838→  setCompare: (id) => set({ compareId: id }),
+   839→   839→    }),
+   840→   840→    {
+   841→   841→      name: 'pixelforge-settings',
+   842→   842→      version: 1,
+   843→   843→      // persist only user preferences — never queue items (blob URLs die anyway)
+   844→   844→      partialize: (s) => ({ settings: s.settings }) as unknown as UpscalerState,
+   845→   845→      // hydration is triggered manually from <Workspace /> after mount so the
+   846→   846→      // server-rendered markup never mismatches
+   847→   847→      skipHydration: true,
+   848→   848→      merge: (persisted, current) => {
+   849→   849→        const p = (persisted ?? {}) as Partial<UpscalerState>;
+   850→   850→        return {
+   851→   851→          ...current,
+   852→   852→          ...p,
+   853→   853→          settings: { ...DEFAULT_SETTINGS, ...(p.settings ?? {}) },
+   854→   854→        };
+   855→   855→      },
+   856→   856→    }
+   857→   857→  )
+   858→   858→);
+   859→   859→
+   860→   860→/* ------------------------------------------------------------------ */
+   861→   861→/* Download helpers (kept near the store so components stay dumb)      */
+   862→   862→
+   863→   863→export function downloadBlob(blob: Blob, filename: string) {
+   864→   864→  const url = URL.createObjectURL(blob);
+   865→   865→  const a = document.createElement('a');
+   866→   866→  a.href = url;
+   867→   867→  a.download = filename;
+   868→   868→  document.body.appendChild(a);
+   869→   869→  a.click();
+   870→   870→  a.remove();
+   871→   871→  setTimeout(() => URL.revokeObjectURL(url), 4000);
+   872→   872→}
+   873→   873→
+   874→   874→export function resultFilename(
+   875→   875→  name: string,
+   876→   876→  scale: ScaleFactor,
+   877→   877→  format: OutputFormat,
+   878→   878→  target?: number
+   879→   879→): string {
+   880→   880→  const base = name.replace(/\.[^.]+$/, '') || 'image';
+   881→   881→  const label = target ? `${target}px` : `${scale}x`;
+   882→   882→  return `${base}_${label}_upscaled.${extForFormat(format)}`;
+   883→   883→}
+   884→   884→
+   885→   885→export async function downloadAllAsZip() {
+   886→   886→  const { items } = useStore.getState();
+   887→   887→  const done = items.filter((i) => i.status === 'done' && i.result && i.zip !== false);
+   888→   888→  if (!done.length) return;
+   889→   889→  const { toast } = await import('sonner');
+   890→   890→  const t = toast.loading(`Packing ${done.length} image${done.length > 1 ? 's' : ''}…`);
+   891→   891→  try {
+   892→   892→    const JSZip = (await import('jszip')).default;
+   893→   893→    const zip = new JSZip();
+   894→   894→    const used = new Set<string>();
+   895→   895→    for (const item of done) {
+   896→   896→      const r = item.result!;
+   897→   897→      let filename = resultFilename(item.name, r.scale, r.format, r.target);
+   898→   898→      let i = 1;
+   899→   899→      while (used.has(filename)) {
+   900→   900→        filename = resultFilename(item.name, r.scale, r.format, r.target).replace(/(\.\w+)$/, `-${i++}$1`);
+   901→   901→      }
+   902→   902→      used.add(filename);
+   903→   903→      const blob = await (await fetch(r.url)).blob();
+   904→   904→      zip.file(filename, blob);
+   905→   905→    }
+   906→   906→    const out = await zip.generateAsync({ type: 'blob' });
+   907→   907→    const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
+   908→   908→    downloadBlob(out, `pixelforge-upscaled-${stamp}.zip`);
+   909→   909→    toast.success(`ZIP ready — ${formatBytes(out.size)}`, { id: t });
+   910→   910→  } catch (err) {
+   911→   911→    console.error(err);
+   912→   912→    toast.error('Could not build the ZIP archive', { id: t });
+   913→   913→  }
+   914→   914→}
+   915→   915→
