@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { ImagePlus } from 'lucide-react';
+import { MaterialIcon } from './material-icon';
 import { useStore } from '@/lib/upscaler/store';
 
 /**
@@ -90,7 +90,7 @@ export function WindowDrop() {
     >
       <div className="pf-drag relative flex h-full w-full max-w-2xl flex-col items-center justify-center gap-3 rounded-3xl border-2 border-dashed border-primary/60 bg-primary/5 text-center shadow-[0_0_100px_-24px] shadow-primary/60">
         <span className="flex h-16 w-16 items-center justify-center rounded-2xl border border-primary/25 bg-primary/10 text-primary shadow-inner">
-          <ImagePlus className="pf-wiggle h-8 w-8" aria-hidden />
+          <MaterialIcon name="add_photo_alternate" size={34} className="pf-wiggle" />
         </span>
         <div className="space-y-1">
           <p className="text-lg font-semibold tracking-tight">Drop to upscale</p>

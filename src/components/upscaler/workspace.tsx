@@ -92,7 +92,7 @@ export function Workspace() {
 
   return (
     <section
-      id="workspace"
+      id="tool"
       className="mx-auto w-full max-w-6xl scroll-mt-20 px-4 pb-16"
       aria-label="Upscaler workspace"
     >

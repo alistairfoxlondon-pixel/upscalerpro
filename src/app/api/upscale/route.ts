@@ -1,55 +1,42 @@
-import { NextRequest, NextResponse } from "next/server";
-import sharp from "sharp";
+import { NextRequest, NextResponse } from 'next/server';
+import sharp from 'sharp';
+import {
+  upscaleBuffer,
+  MAX_INPUT_PIXELS,
+  MAX_INPUT_SIDE,
+  MAX_INPUT_BYTES,
+  MAX_OUT_SIDE,
+  MAX_OUT_PIXELS,
+  AI_INPUT_MAX_SIDE,
+} from '@/lib/upscaler/engine';
 
 /**
- * PixelForge server side upscaler.
- *
  * POST multipart/form-data:
- *   file      image (jpeg, png, webp, gif, avif, tiff, heic*)
- *   scale     2 | 3 | 4 | 8            (factor mode)
- *   target    px longest side          (target mode, overrides scale)
- *   denoise   0 | 1 | 2                (median filter off / light / strong)
- *   sharpen   0 | 1                    (unsharp mask after upscale)
+ *   file      image
+ *   engine    standard | ai            (Real-ESRGAN x4 v3)
+ *   scale     2 | 3 | 4 | 8           (factor mode)
+ *   target    px longest side         (target mode, overrides scale)
+ *   denoise   0 | 1 | 2               (standard engine)
+ *   sharpen   0 | 1
  *   format    jpeg | png | webp
- *   quality   0.5..1                   (jpeg / webp)
- *   exif      0 | 1                    (keep metadata in jpeg output)
+ *   quality   0.5..1                  (jpeg / webp)
+ *   exif      0 | 1                   (standard engine, jpeg output)
  *
- * Everything runs in memory. Nothing is written to disk, so nothing needs
- * deleting: the file is gone the moment the response is sent.
+ * The response always reports what was actually applied in X-Applied-*
+ * headers so the UI can show honest feedback instead of guesses.
+ *
+ * Everything runs in memory. Nothing is written to disk and nothing is
+ * stored after the response: the file is gone the moment it is sent.
  */
 
-export const runtime = "nodejs";
+export const runtime = 'nodejs';
 export const maxDuration = 60;
-export const dynamic = "force-dynamic";
+export const dynamic = 'force-dynamic';
 
-const MAX_INPUT_PIXELS = 30_000_000;
-const MAX_INPUT_SIDE = 8192;
-const MAX_INPUT_BYTES = 26 * 1024 * 1024;
-const MAX_OUT_SIDE = 8192;
-const MAX_OUT_PIXELS = 34_000_000;
 const SCALES = [2, 3, 4, 8] as const;
 
 function jsonError(message: string, status: number) {
   return NextResponse.json({ error: message }, { status });
-}
-
-/** Split an upscale factor into <=2x lanczos passes for cleaner large steps. */
-function stepsFor(factor: number): number[] {
-  const steps: number[] = [];
-  let remaining = factor;
-  while (remaining > 2.0001) {
-    steps.push(2);
-    remaining /= 2;
-  }
-  if (remaining > 1.0001) steps.push(remaining);
-  return steps.length ? steps : [1];
-}
-
-/** Cumulative factor up to step i. */
-function cumulative(steps: number[], i: number): number {
-  let k = 1;
-  for (let s = 0; s <= i; s++) k *= steps[s];
-  return k;
 }
 
 export async function POST(req: NextRequest) {
@@ -57,135 +44,129 @@ export async function POST(req: NextRequest) {
   try {
     form = await req.formData();
   } catch {
-    return jsonError("Invalid form data", 400);
+    return jsonError('Invalid form data', 400);
   }
 
-  const file = form.get("file");
+  const file = form.get('file');
   if (!(file instanceof File) || file.size === 0) {
-    return jsonError("No image received", 400);
+    return jsonError('No image received', 400);
   }
   if (file.size > MAX_INPUT_BYTES) {
-    return jsonError("Image is too large (max 26 MB)", 413);
+    return jsonError('Image is too large (max 26 MB)', 413);
   }
 
   const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
-  const rawScale = Number(form.get("scale"));
-  const rawTarget = Number(form.get("target"));
-  const denoise = clamp(Number(form.get("denoise")) || 0, 0, 2);
-  const doSharpen = form.get("sharpen") === "1";
-  const rawFormat = String(form.get("format") || "png");
-  const format = (["jpeg", "png", "webp"].includes(rawFormat) ? rawFormat : "png") as
-    | "jpeg"
-    | "png"
-    | "webp";
-  const quality = clamp(Number(form.get("quality")) || 0.92, 0.5, 1);
-  const keepExif = form.get("exif") === "1";
+  const engineRaw = String(form.get('engine') || 'standard');
+  const engine: 'standard' | 'ai' = engineRaw === 'ai' ? 'ai' : 'standard';
+  const rawScale = Number(form.get('scale'));
+  const rawTarget = Number(form.get('target'));
+  const denoise = clamp(Number(form.get('denoise')) || 0, 0, 2) as 0 | 1 | 2;
+  const doSharpen = form.get('sharpen') === '1';
+  const rawFormat = String(form.get('format') || 'png');
+  const format = (['jpeg', 'png', 'webp'].includes(rawFormat) ? rawFormat : 'png') as
+    | 'jpeg'
+    | 'png'
+    | 'webp';
+  const quality = clamp(Number(form.get('quality')) || 0.92, 0.5, 1);
+  const keepExif = form.get('exif') === '1';
   const hasTarget = Number.isFinite(rawTarget) && rawTarget >= 16;
-  const scale = (SCALES.includes(rawScale as (typeof SCALES)[number]) ? rawScale : 2) as 2 | 3 | 4 | 8;
+  const scale = (SCALES.includes(rawScale as (typeof SCALES)[number])
+    ? rawScale
+    : 2) as (typeof SCALES)[number];
 
   const started = Date.now();
   try {
     const input = Buffer.from(await file.arrayBuffer());
-    const meta = await sharp(input, { failOn: "none", limitInputPixels: MAX_INPUT_PIXELS }).metadata();
+    const meta = await sharp(input, { failOn: 'none', limitInputPixels: MAX_INPUT_PIXELS }).metadata();
     let w = meta.width ?? 0;
     let h = meta.height ?? 0;
     const orientation = meta.orientation ?? 1;
     if (orientation >= 5) [w, h] = [h, w]; // rotate() swaps the axes
-    if (!w || !h) return jsonError("Could not read image dimensions", 400);
-    if (Math.max(w, h) > MAX_INPUT_SIDE) return jsonError("Image is too large (max 8192 px per side)", 413);
-    if (w * h > MAX_INPUT_PIXELS) return jsonError("Image is too large (max 30 MP)", 413);
+    if (!w || !h) return jsonError('Could not read image dimensions', 400);
+    if (Math.max(w, h) > MAX_INPUT_SIDE) return jsonError('Image is too large (max 8192 px per side)', 413);
+    if (w * h > MAX_INPUT_PIXELS) return jsonError('Image is too large (max 30 MP)', 413);
 
-    // plan the output size (server enforces the same caps the client checks)
+    // AI engine input budget: larger photos fall back to standard with a
+    // clear notice instead of a mysterious timeout
+    let appliedEngine = engine;
+    let aiFallback = false;
+    if (engine === 'ai' && Math.max(w, h) > AI_INPUT_MAX_SIDE) {
+      appliedEngine = 'standard';
+      aiFallback = true;
+    }
+
+    // plan the output size
     let outW: number;
     let outH: number;
+    let appliedScale = scale;
+    let capped = false;
     if (hasTarget) {
       const k = rawTarget / Math.max(w, h);
-      if (k <= 0.02) return jsonError("Target size is too small", 400);
+      if (k <= 0.02) return jsonError('Target size is too small', 400);
       outW = Math.max(1, Math.round(w * k));
       outH = Math.max(1, Math.round(h * k));
+      appliedScale = (Math.max(1, Math.round(k)) || 1) as (typeof SCALES)[number];
     } else {
-      // largest scale that fits inside the output caps
-      let s = 2;
+      // honor the requested scale exactly when it fits, else pick the
+      // largest that fits and flag it so the UI can tell the user
+      let s: (typeof SCALES)[number] = 2;
       for (const cand of SCALES) {
         if (cand > scale) break;
         if (w * cand <= MAX_OUT_SIDE && h * cand <= MAX_OUT_SIDE && w * cand * h * cand <= MAX_OUT_PIXELS) {
-          s = cand as 2 | 3 | 4 | 8;
+          s = cand as (typeof SCALES)[number];
         }
       }
+      if (s !== scale) capped = true;
+      appliedScale = s;
       outW = w * s;
       outH = h * s;
     }
     if (Math.max(outW, outH) > MAX_OUT_SIDE || outW * outH > MAX_OUT_PIXELS) {
-      return jsonError("Output size exceeds the 8192 px / 34 MP limit", 413);
+      return jsonError('Output size exceeds the 8192 px / 34 MP limit', 413);
     }
 
-    let img = sharp(input, { failOn: "none", limitInputPixels: MAX_INPUT_PIXELS }).rotate();
-    if (denoise > 0) img = img.median(denoise === 2 ? 5 : 3);
+    const meta2 = await sharp(input, { failOn: 'none', limitInputPixels: MAX_INPUT_PIXELS }).metadata();
+    const hasAlpha = !!meta2.hasAlpha;
 
-    // Upscale in <=2x lanczos passes (cleaner big steps, mild sharpen between
-    // passes when requested). Downscale and exact targets resize in one pass.
-    const factor = Math.max(w, h) > 0 ? Math.max(outW, outH) / Math.max(w, h) : 1;
-    if (factor > 1.02) {
-      const steps = stepsFor(factor);
-      for (let i = 0; i < steps.length; i++) {
-        const isLast = i === steps.length - 1;
-        const stepW = isLast ? outW : Math.min(outW, Math.round(w * cumulative(steps, i)));
-        const stepH = isLast ? outH : Math.min(outH, Math.round(h * cumulative(steps, i)));
-        img = img.resize({
-          width: Math.max(1, stepW),
-          height: Math.max(1, stepH),
-          kernel: "lanczos3",
-          fit: "fill",
-        });
-        if (isLast) break;
-        if (doSharpen) img = img.sharpen({ sigma: 0.7 });
-        const buf = await img.toBuffer();
-        img = sharp(buf, { limitInputPixels: MAX_OUT_PIXELS * 4 });
-      }
-    } else {
-      img = img.resize({
-        width: outW,
-        height: outH,
-        kernel: "lanczos3",
-        fit: "fill",
-      });
-    }
+    const outcome = await upscaleBuffer(input, {
+      engine: appliedEngine,
+      outW,
+      outH,
+      inW: w,
+      inH: h,
+      denoise,
+      sharpen: doSharpen,
+      format,
+      quality,
+      keepExif,
+      hasAlpha,
+    });
 
-    if (doSharpen) img = img.sharpen({ sigma: 1, m1: 0.4, m2: 0.6 });
-
-    // encode
-    if (format === "jpeg") {
-      img = img.flatten({ background: "#ffffff" }).jpeg({ quality: Math.round(quality * 100), mozjpeg: true });
-      if (keepExif) {
-        // orientation is already baked into the pixels by rotate(), so the
-        // stored tag must be reset or viewers would rotate a second time
-        img = img.keepExif().withExifMerge({ IFD0: { Orientation: "1" } });
-      }
-    } else if (format === "webp") {
-      img = img.webp({ quality: Math.round(quality * 100), effort: 4 });
-    } else {
-      img = img.png({ compressionLevel: 9 });
-    }
-
-    const { data, info } = await img.toBuffer({ resolveWithObject: true });
     const ms = Date.now() - started;
-
-    return new NextResponse(new Uint8Array(data), {
+    return new NextResponse(new Uint8Array(outcome.data), {
       status: 200,
       headers: {
-        "Content-Type": `image/${format}`,
-        "Content-Length": String(data.length),
-        "X-Image-Width": String(info.width ?? outW),
-        "X-Image-Height": String(info.height ?? outH),
-        "X-Process-Ms": String(ms),
-        "Cache-Control": "no-store",
+        'Content-Type': `image/${format}`,
+        'Content-Length': String(outcome.data.length),
+        'X-Image-Width': String(outcome.width),
+        'X-Image-Height': String(outcome.height),
+        'X-Process-Ms': String(ms),
+        'X-Applied-Engine': appliedEngine,
+        'X-Applied-Scale': String(appliedScale),
+        'X-Applied-Format': format,
+        'X-Applied-Sharpen': doSharpen ? '1' : '0',
+        'X-Ai-Tiles': String(outcome.aiTiles),
+        'X-Capped': capped ? '1' : '0',
+        'X-Ai-Fallback': aiFallback ? '1' : '0',
+        'Cache-Control': 'no-store',
       },
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Processing failed";
+    const message = err instanceof Error ? err.message : 'Processing failed';
     if (/input file missing|unsupported image format/i.test(message)) {
-      return jsonError("Unsupported or corrupted image", 415);
+      return jsonError('Unsupported or corrupted image', 415);
     }
+    console.error('[upscale]', message);
     return jsonError(message.slice(0, 180), 500);
   }
 }

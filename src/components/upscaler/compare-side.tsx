@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Minus, Plus, Maximize, Scan } from 'lucide-react';
+import { MaterialIcon } from './material-icon';
 import { cn } from '@/lib/utils';
 import { useRememberedZoom, MIN_ZOOM, MAX_ZOOM } from './use-remembered-zoom';
 
@@ -271,7 +271,7 @@ export function CompareSideBySide({
           onClick={() => applyZoom(zoomRef.current / 1.4)}
           className="flex h-7 w-7 items-center justify-center rounded-md text-foreground transition-colors hover:bg-muted disabled:opacity-40"
         >
-          <Minus className="h-3.5 w-3.5" aria-hidden />
+          <MaterialIcon name="zoom_out" size={16} />
         </button>
         <button
           type="button"
@@ -280,7 +280,7 @@ export function CompareSideBySide({
           onClick={() => applyZoom(zoom > 1 ? 1 : Math.min(2, MAX_ZOOM))}
           className="flex h-7 min-w-14 items-center justify-center gap-1 rounded-md px-1 font-mono text-[10px] tabular-nums text-foreground transition-colors hover:bg-muted"
         >
-          {zoom > 1 ? <Scan className="h-3 w-3" aria-hidden /> : <Maximize className="h-3 w-3" aria-hidden />}
+          {zoom > 1 ? <MaterialIcon name="fit_screen" size={14} /> : <MaterialIcon name="open_in_full" size={14} />}
           {Math.round(zoom * 100)}%
         </button>
         <button
@@ -291,7 +291,7 @@ export function CompareSideBySide({
           onClick={() => applyZoom(zoomRef.current * 1.4)}
           className="flex h-7 w-7 items-center justify-center rounded-md text-foreground transition-colors hover:bg-muted disabled:opacity-40"
         >
-          <Plus className="h-3.5 w-3.5" aria-hidden />
+          <MaterialIcon name="zoom_in" size={16} />
         </button>
       </div>
 

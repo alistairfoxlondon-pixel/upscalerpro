@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Command } from 'lucide-react';
+import { MaterialIcon } from './material-icon';
 import {
   Dialog,
   DialogContent,
@@ -74,7 +74,7 @@ export function KeyboardShortcuts() {
       <DialogContent className="max-w-sm p-5">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
-            <Command className="h-4 w-4 text-primary" aria-hidden />
+            <MaterialIcon name="keyboard_command_key" size={17} className="text-primary" />
             Keyboard shortcuts
           </DialogTitle>
           <DialogDescription className="text-xs">

@@ -1,4 +1,4 @@
-import type { ScaleFactor, Settings } from './types';
+import type { EngineChoice, ScaleFactor, Settings } from './types';
 
 export const SCALES: ScaleFactor[] = [2, 3, 4, 8];
 
@@ -9,13 +9,25 @@ export const MAX_INPUT_PIXELS = 30_000_000;
 export const MAX_INPUT_SIDE = 8192;
 export const MAX_BATCH_FILES = 50;
 
+/** Must mirror the server (engine.ts). AI inference budget per image. */
+export const AI_INPUT_MAX_SIDE = 1280;
+
 /** Upload budget: the target platform accepts about 4.5 MB per request. */
 export const MAX_UPLOAD_BYTES = 4.2 * 1024 * 1024;
 
 export function resolveFormat(mime: string, name: string): 'jpeg' | 'png' | 'webp' {
   const m = (mime || '').toLowerCase();
   const ext = name.toLowerCase().split('.').pop() ?? '';
-  if (m === 'image/jpeg' || m === 'image/jpg' || ext === 'jpg' || ext === 'jpeg' || m === 'image/heic' || m === 'image/heif' || ext === 'heic' || ext === 'heif') {
+  if (
+    m === 'image/jpeg' ||
+    m === 'image/jpg' ||
+    ext === 'jpg' ||
+    ext === 'jpeg' ||
+    m === 'image/heic' ||
+    m === 'image/heif' ||
+    ext === 'heic' ||
+    ext === 'heif'
+  ) {
     return 'jpeg';
   }
   if (m === 'image/webp' || ext === 'webp') return 'webp';
@@ -39,7 +51,7 @@ export const TARGET_MIN = 320;
 export const TARGET_MAX = 8192;
 
 export interface SizePlan {
-  /** AI style scale used for the badge / filename */
+  /** effective scale used for the badge / filename */
   scale: ScaleFactor;
   outW: number;
   outH: number;
@@ -47,18 +59,22 @@ export interface SizePlan {
   clamped?: boolean;
   /** target mode: caps forced a smaller result than the target */
   short?: boolean;
+  /** AI engine will be skipped for this image (too large to infer in time) */
+  aiFallback?: boolean;
   /** human readable reason when the request can not be satisfied */
   error?: string;
 }
 
-/** Factor mode: largest scale that is <= requested and inside the caps. */
+function fits(w: number, h: number, s: number): boolean {
+  return w * s <= MAX_OUT_DIM && h * s <= MAX_OUT_DIM && w * s * h * s <= MAX_OUT_PIXELS;
+}
+
+/** Factor mode: requested scale when it fits, else the largest that fits. */
 export function planFactor(w: number, h: number, requested: ScaleFactor): SizePlan | null {
   for (const s of [requested, 4, 3, 2] as ScaleFactor[]) {
     if (s > requested) continue;
-    const ow = w * s;
-    const oh = h * s;
-    if (ow <= MAX_OUT_DIM && oh <= MAX_OUT_DIM && ow * oh <= MAX_OUT_PIXELS) {
-      return { scale: s, outW: ow, outH: oh, clamped: s !== requested };
+    if (fits(w, h, s)) {
+      return { scale: s, outW: w * s, outH: h * s, clamped: s !== requested };
     }
   }
   return null;
@@ -66,7 +82,7 @@ export function planFactor(w: number, h: number, requested: ScaleFactor): SizePl
 
 /**
  * Target mode: exact longest side. Targets above the original size upscale,
- * smaller targets downscale. Both are handled server side in one pass.
+ * smaller targets downscale. Both are handled server side.
  */
 export function planTarget(w: number, h: number, targetSide: number): SizePlan {
   const longest = Math.max(w, h);
@@ -84,10 +100,8 @@ export function planTarget(w: number, h: number, targetSide: number): SizePlan {
   }
   const required = targetSide / longest;
   const fit = (required <= 2 ? 2 : required <= 3 ? 3 : required <= 4 ? 4 : 8) as ScaleFactor;
-  const reaches = (s: ScaleFactor) =>
-    w * s <= MAX_OUT_DIM && h * s <= MAX_OUT_DIM && w * s * h * s <= MAX_OUT_PIXELS;
-  if (!reaches(fit)) {
-    const shortScale = ([4, 3, 2] as ScaleFactor[]).find((s) => s < fit && reaches(s));
+  if (!fits(w, h, fit)) {
+    const shortScale = ([4, 3, 2] as ScaleFactor[]).find((s) => s < fit && fits(w, h, s));
     if (!shortScale) {
       return { scale: 2, outW: w * 2, outH: h * 2, error: 'Image is too large to upscale' };
     }
@@ -105,8 +119,17 @@ export function planTarget(w: number, h: number, targetSide: number): SizePlan {
 }
 
 /** Resolve the output plan for current settings. */
-export function planOutput(w: number, h: number, settings: Pick<Settings, 'scaleMode' | 'scale' | 'targetSide'>): SizePlan | null {
-  return settings.scaleMode === 'target'
-    ? planTarget(w, h, settings.targetSide)
-    : planFactor(w, h, settings.scale);
+export function planOutput(
+  w: number,
+  h: number,
+  settings: Pick<Settings, 'scaleMode' | 'scale' | 'targetSide' | 'engine'>
+): SizePlan | null {
+  const plan =
+    settings.scaleMode === 'target'
+      ? planTarget(w, h, settings.targetSide)
+      : planFactor(w, h, settings.scale);
+  if (plan && !plan.error && settings.engine === 'ai' && Math.max(w, h) > AI_INPUT_MAX_SIDE) {
+    plan.aiFallback = true;
+  }
+  return plan;
 }

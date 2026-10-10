@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Download } from 'lucide-react';
+import { MaterialIcon } from './material-icon';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
@@ -59,7 +59,7 @@ export function InstallButton() {
             onClick={() => void install()}
             aria-label="Install PixelForge as an app"
           >
-            <Download className="h-4 w-4" aria-hidden />
+            <MaterialIcon name="download" size={17} />
             <span className="hidden text-xs sm:inline">Install</span>
           </Button>
         </TooltipTrigger>
