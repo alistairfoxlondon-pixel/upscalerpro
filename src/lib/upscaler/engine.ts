@@ -289,7 +289,7 @@ async function inferTiled(
 
 /* ------------------------------ encoding ---------------------------- */
 
-async function encodeImg(img: sharp.Sharp, p: UpscaleParams): Promise<Buffer> {
+export async function encodeImg(img: sharp.Sharp, p: UpscaleParams): Promise<Buffer> {
   let out = img;
   if (p.format === 'jpeg') {
     out = out.flatten({ background: '#ffffff' }).jpeg({ quality: Math.round(p.quality * 100), mozjpeg: true });

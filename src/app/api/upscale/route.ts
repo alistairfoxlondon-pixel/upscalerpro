@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import sharp from 'sharp';
 import {
   upscaleBuffer,
+  encodeImg,
   MAX_INPUT_PIXELS,
   MAX_INPUT_SIDE,
   MAX_INPUT_BYTES,
@@ -9,11 +10,12 @@ import {
   MAX_OUT_PIXELS,
   AI_INPUT_MAX_SIDE,
 } from '@/lib/upscaler/engine';
+import { upscaleGlm } from '@/lib/upscaler/glm';
 
 /**
  * POST multipart/form-data:
  *   file      image
- *   engine    standard | ai            (Real-ESRGAN x4 v3)
+ *   engine    standard | ai | glm     (Real-ESRGAN x4 v3 / GLM generative)
  *   scale     2 | 3 | 4 | 8           (factor mode)
  *   target    px longest side         (target mode, overrides scale)
  *   denoise   0 | 1 | 2               (standard engine)
@@ -57,7 +59,8 @@ export async function POST(req: NextRequest) {
 
   const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
   const engineRaw = String(form.get('engine') || 'standard');
-  const engine: 'standard' | 'ai' = engineRaw === 'ai' ? 'ai' : 'standard';
+  const engine: 'standard' | 'ai' | 'glm' =
+    engineRaw === 'ai' ? 'ai' : engineRaw === 'glm' ? 'glm' : 'standard';
   const rawScale = Number(form.get('scale'));
   const rawTarget = Number(form.get('target'));
   const denoise = clamp(Number(form.get('denoise')) || 0, 0, 2) as 0 | 1 | 2;
@@ -87,7 +90,8 @@ export async function POST(req: NextRequest) {
     if (w * h > MAX_INPUT_PIXELS) return jsonError('Image is too large (max 30 MP)', 413);
 
     // AI engine input budget: larger photos fall back to standard with a
-    // clear notice instead of a mysterious timeout
+    // clear notice instead of a mysterious timeout. GLM always works: the
+    // input is pre resized to the supported canvas before generation.
     let appliedEngine = engine;
     let aiFallback = false;
     if (engine === 'ai' && Math.max(w, h) > AI_INPUT_MAX_SIDE) {
@@ -128,8 +132,8 @@ export async function POST(req: NextRequest) {
     const meta2 = await sharp(input, { failOn: 'none', limitInputPixels: MAX_INPUT_PIXELS }).metadata();
     const hasAlpha = !!meta2.hasAlpha;
 
-    const outcome = await upscaleBuffer(input, {
-      engine: appliedEngine,
+    const params = {
+      engine: appliedEngine === 'glm' ? 'ai' : appliedEngine,
       outW,
       outH,
       inW: w,
@@ -140,7 +144,11 @@ export async function POST(req: NextRequest) {
       quality,
       keepExif,
       hasAlpha,
-    });
+    };
+    const outcome =
+      appliedEngine === 'glm'
+        ? await upscaleGlm(input, params, encodeImg)
+        : await upscaleBuffer(input, params);
 
     const ms = Date.now() - started;
     return new NextResponse(new Uint8Array(outcome.data), {

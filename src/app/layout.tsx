@@ -16,18 +16,18 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Upscaler Pro: Free AI Image Upscaler",
+  title: "StockPrep: Adobe Stock Prep with AI Upscaling and Metadata",
   description:
-    "Enlarge images up to 8x with real AI detail. Server side processing, batch ZIP export, live before and after compare. Files are never stored.",
+    "Upscale images with AI, generate Adobe Stock titles, keywords and categories, check submission readiness and export a ready to upload ZIP with metadata CSV. Files are never stored.",
   keywords: [
-    "image upscaler",
-    "AI upscaling",
-    "enlarge image",
-    "photo enhancer",
-    "upscale image online",
+    "Adobe Stock",
+    "stock photo metadata",
+    "AI upscaler",
+    "image keyword generator",
+    "stock photo prep",
     "Real-ESRGAN",
   ],
-  authors: [{ name: "Upscaler Pro" }],
+  authors: [{ name: "StockPrep" }],
   icons: {
     icon: "/icon.svg",
     apple: "/icon-192.png",
@@ -35,20 +35,20 @@ export const metadata: Metadata = {
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
-    title: "Upscaler Pro",
+    title: "StockPrep",
     statusBarStyle: "black-translucent",
   },
   openGraph: {
-    title: "Upscaler Pro: Free AI Image Upscaler",
+    title: "StockPrep: Adobe Stock Prep with AI",
     description:
-      "Enlarge images up to 8x with real AI detail. Files are never stored.",
+      "AI upscaling, titles, keywords and a submission ready download in one pass. Files are never stored.",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Upscaler Pro: Free AI Image Upscaler",
+    title: "StockPrep: Adobe Stock Prep with AI",
     description:
-      "Enlarge images up to 8x with real AI detail. Files are never stored.",
+      "AI upscaling, titles, keywords and a submission ready download in one pass.",
   },
 };
 

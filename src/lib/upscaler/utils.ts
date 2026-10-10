@@ -312,7 +312,7 @@ function drawText(): HTMLCanvasElement {
   // signature + date stamp
   ctx.font = 'italic 24px Georgia, serif';
   ctx.fillStyle = '#3a3a40';
-  ctx.fillText('The PixelForge Team', 48, 540);
+  ctx.fillText('The StockPrep Team', 48, 540);
   ctx.save();
   ctx.translate(W - 210, 620);
   ctx.rotate(-0.08);
@@ -336,14 +336,14 @@ export async function createSampleFile(kind: SampleKind = 'photo'): Promise<File
   if (kind === 'pixel') {
     const big = drawPixel();
     const scaled = shrink(big, 60, 60); // 1.5× nearest-ish crush
-    return canvasToFile(scaled, 'pixelforge-sample-pixelart.png', 'image/png');
+    return canvasToFile(scaled, 'stockprep-sample-pixelart.png', 'image/png');
   }
   if (kind === 'text') {
     const big = drawText();
     const scaled = shrink(big, 170, 227); // ~24% — text turns genuinely blurry
-    return canvasToFile(scaled, 'pixelforge-sample-text.jpg', 'image/jpeg', 0.8);
+    return canvasToFile(scaled, 'stockprep-sample-text.jpg', 'image/jpeg', 0.8);
   }
   const photo = drawPhoto(1024, 768);
   const scaled = shrink(photo, 96, 72);
-  return canvasToFile(scaled, 'pixelforge-sample.jpg', 'image/jpeg', 0.72);
+  return canvasToFile(scaled, 'stockprep-sample.jpg', 'image/jpeg', 0.72);
 }

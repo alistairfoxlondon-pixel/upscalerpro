@@ -7,16 +7,16 @@ export function SiteHeader() {
       <div className="mx-auto flex h-14 w-full max-w-6xl items-center gap-3 px-4">
         <a href="#top" className="flex items-center gap-2 font-bold tracking-tight">
           <MaterialIcon
-            name="photo_filter"
+            name="new_releases"
             filled
-            label="Upscaler Pro logo"
+            label="StockPrep logo"
             size={22}
             className="text-primary"
           />
-          <span className="text-[15px]">Upscaler Pro</span>
+          <span className="text-[15px]">StockPrep</span>
         </a>
         <span className="hidden rounded-sm bg-secondary px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-secondary-foreground sm:inline">
-          Free
+          Adobe Stock ready
         </span>
 
         <nav aria-label="Primary" className="ml-auto flex items-center gap-1">
@@ -25,7 +25,7 @@ export function SiteHeader() {
             className="hidden items-center gap-1.5 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:flex"
           >
             <MaterialIcon name="photo_size_select_large" size={18} />
-            Upscale
+            Studio
           </a>
           <a
             href="https://github.com/alistairfoxlondon-pixel/upscalerpro"

@@ -15,6 +15,7 @@ import {
 import { copyImageToClipboard, formatBytes, formatDuration, shareImage } from '@/lib/upscaler/utils';
 import { openShortcuts } from './keyboard-shortcuts';
 import { MaterialIcon } from './material-icon';
+import { StockPanel } from './stock-panel';
 import type { QueueItem } from '@/lib/upscaler/store';
 import { cn } from '@/lib/utils';
 
@@ -106,13 +107,13 @@ function AppliedChips({ item }: { item: QueueItem }) {
       <span
         className={cn(
           'inline-flex items-center gap-0.5 rounded-sm px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide',
-          r.engine === 'ai'
-            ? 'bg-primary text-primary-foreground'
-            : 'bg-secondary text-secondary-foreground'
+          r.engine === 'standard'
+            ? 'bg-secondary text-secondary-foreground'
+            : 'bg-primary text-primary-foreground'
         )}
       >
-        <MaterialIcon name={r.engine === 'ai' ? 'neurology' : 'speed'} size={11} />
-        {r.engine === 'ai' ? 'AI' : 'Standard'}
+        <MaterialIcon name={r.engine === 'ai' ? 'neurology' : r.engine === 'glm' ? 'psychology' : 'speed'} size={11} />
+        {r.engine === 'ai' ? 'AI Detail' : r.engine === 'glm' ? 'GLM' : 'Standard'}
       </span>
       <span className="rounded-sm bg-secondary px-1.5 py-px font-mono text-[9px] font-semibold text-secondary-foreground">
         {r.target ? `${r.target}px` : `${r.scale}x`}
@@ -387,6 +388,7 @@ function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
           </p>
         )}
         {item.status === 'done' && <AppliedNotice item={item} />}
+        {item.status === 'done' && <StockPanel item={item} />}
       </div>
 
       <ItemActions item={item} />
@@ -430,12 +432,12 @@ function QueueCard({ item, index }: { item: QueueItem; index: number }) {
             <span
               className={cn(
                 'inline-flex shrink-0 items-center rounded-sm px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide',
-                r.engine === 'ai'
-                  ? 'bg-primary text-primary-foreground'
-                  : 'bg-black/60 text-white'
+                r.engine === 'standard'
+                  ? 'bg-black/60 text-white'
+                  : 'bg-primary text-primary-foreground'
               )}
             >
-              {r.engine === 'ai' ? 'AI' : 'Std'}
+              {r.engine === 'ai' ? 'AI Detail' : r.engine === 'glm' ? 'GLM' : 'Std'}
             </span>
             <span className="shrink-0 rounded-sm bg-black/60 px-1.5 py-px font-mono text-[9px] font-semibold text-white">
               {r.target ? `${r.target}px` : `${r.scale}x`}
@@ -512,6 +514,7 @@ function QueueCard({ item, index }: { item: QueueItem; index: number }) {
             {item.error}
           </p>
         )}
+        {item.status === 'done' && <StockPanel item={item} />}
       </div>
 
       <div className="-mx-0.5 flex justify-end border-t border-border pt-1.5">

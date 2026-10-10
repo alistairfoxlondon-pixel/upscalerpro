@@ -1,6 +1,6 @@
 'use client';
 
-import type { OutputFormat, ScaleFactor } from './types';
+import type { EngineChoice, OutputFormat, ScaleFactor } from './types';
 
 /**
  * IndexedDB session-persistence for finished results — lets completed
@@ -45,7 +45,7 @@ export interface PersistedResult {
     /** target-mode: exact longest side the output was sized to */
     target?: number;
     /** engine that produced the result (older rows default to standard) */
-    engine?: 'standard' | 'ai';
+    engine?: EngineChoice;
     tiles?: number;
   };
   savedAt: number;
