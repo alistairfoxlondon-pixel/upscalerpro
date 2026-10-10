@@ -104,11 +104,14 @@ export function CompareModal() {
                   variant="secondary"
                   className={cn(
                     'gap-1 font-mono text-[10px]',
-                    r.engine === 'ai' && 'bg-primary text-primary-foreground'
+                    r.engine !== 'standard' && 'bg-primary text-primary-foreground'
                   )}
                 >
-                  <MaterialIcon name={r.engine === 'ai' ? 'neurology' : 'speed'} size={12} />
-                  {r.engine === 'ai' ? 'AI' : 'Standard'}
+                  <MaterialIcon
+                    name={r.engine === 'ai' ? 'neurology' : r.engine === 'glm' ? 'psychology' : 'speed'}
+                    size={12}
+                  />
+                  {r.engine === 'ai' ? 'AI Detail' : r.engine === 'glm' ? 'GLM' : 'Standard'}
                 </Badge>
                 <Badge variant="secondary" className="font-mono text-[10px]">
                   {r.target ? `${r.target}px` : `${r.scale}x output`}

@@ -18,10 +18,26 @@ import {
   idbPutResult,
   type PersistedResult,
 } from './persist';
-import type { OutputFormat, QueueItem, ResultData, ScaleFactor, Settings } from './types';
+import type {
+  EngineChoice,
+  OutputFormat,
+  QueueItem,
+  ResultData,
+  ScaleFactor,
+  Settings,
+} from './types';
 import { formatBytes } from './utils';
 import type { SampleKind } from './utils';
 import { makePreviewUrl, makeThumbUrl } from './utils';
+import {
+  buildStockCsv,
+  makeAnalyzeProxy,
+  measurePixels,
+  slugify,
+  STOCK_README,
+  toJpegBlob,
+  type StockMeta,
+} from './stock';
 
 export type { QueueItem } from './types';
 
@@ -70,6 +86,10 @@ interface UpscalerState {
   togglePause: () => void;
   setCompare: (id: string | null) => void;
   toggleZip: (id: string) => void;
+  /** generate Adobe Stock metadata for one item (AI) */
+  generateMetadata: (id: string) => Promise<void>;
+  /** update metadata fields by hand */
+  updateMeta: (id: string, patch: Partial<StockMeta>) => void;
   /** reload finished results persisted by a previous session */
   restorePersisted: () => Promise<number>;
 }
@@ -103,7 +123,7 @@ interface ServerResult {
   height: number;
   ms: number;
   applied: {
-    engine: 'standard' | 'ai';
+    engine: EngineChoice;
     scale: number;
     format: string;
     tiles: number;
@@ -188,7 +208,9 @@ function processViaServer(
         const applied = {
           engine: (xhr.getResponseHeader('X-Applied-Engine') === 'ai'
             ? 'ai'
-            : 'standard') as 'standard' | 'ai',
+            : xhr.getResponseHeader('X-Applied-Engine') === 'glm'
+              ? 'glm'
+              : 'standard') as EngineChoice,
           scale: Number(xhr.getResponseHeader('X-Applied-Scale')) || 0,
           format: xhr.getResponseHeader('X-Applied-Format') || '',
           tiles: Number(xhr.getResponseHeader('X-Ai-Tiles')) || 0,
@@ -284,7 +306,7 @@ async function processItem(id: string): Promise<void> {
     });
     return;
   }
-  const settings = state.settings;
+  const settings = useStore.getState().settings;
   const resolved: OutputFormat =
     settings.format === 'auto' ? resolveFormat(item.mime, item.name) : settings.format;
 
@@ -410,6 +432,12 @@ async function processItem(id: string): Promise<void> {
       },
     }));
     void savePersisted(item, res.blob, result);
+    // quality measurements + AI metadata run in the background, the queue
+    // never waits for them
+    void measurePixels(url)
+      .then((stats) => patchItem(id, { stats }))
+      .catch(() => undefined);
+    void useStore.getState().generateMetadata(id);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Processing failed';
     const canceled = /^canceled$/i.test(msg);
@@ -537,6 +565,56 @@ async function ensureLoop() {
 }
 
 let loopRunning = false;
+
+/* --------------------- AI metadata generation ---------------------- */
+
+/** One at a time so batch uploads never hammer the vision endpoint. */
+let metaChain: Promise<void> = Promise.resolve();
+
+function enqueueMeta(id: string) {
+  metaChain = metaChain
+    .then(() => generateMetadataNow(id))
+    .catch(() => undefined);
+}
+
+async function generateMetadataNow(id: string): Promise<void> {
+  const item = useStore.getState().items.find((i) => i.id === id);
+  if (!item || item.status !== 'done' || !item.result?.url) return;
+  patchItem(id, { metaState: 'loading', metaError: undefined });
+  try {
+    const proxy = await makeAnalyzeProxy(item.result.url);
+    const form = new FormData();
+    form.append('file', new File([proxy], 'proxy.jpg', { type: 'image/jpeg' }));
+    const res = await fetch('/api/analyze', { method: 'POST', body: form });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error || `Analysis failed (${res.status})`);
+    }
+    const data = (await res.json()) as {
+      title: string;
+      description: string;
+      keywords: string[];
+      category: number;
+      flags: StockMeta['flags'];
+    };
+    patchItem(id, {
+      meta: {
+        title: data.title,
+        description: data.description,
+        keywords: data.keywords,
+        category: data.category,
+        flags: data.flags,
+        aiGenerated: true,
+      },
+      metaState: 'ready',
+    });
+  } catch (err) {
+    patchItem(id, {
+      metaState: 'error',
+      metaError: err instanceof Error ? err.message : 'Analysis failed',
+    });
+  }
+}
 
 /* ------------------------------------------------------------------ */
 
@@ -788,6 +866,22 @@ export const useStore = create<UpscalerState>()(
       },
 
       setCompare: (id) => set({ compareId: id }),
+
+      generateMetadata: async (id) => {
+        const item = useStore.getState().items.find((i) => i.id === id);
+        if (!item || item.status !== 'done' || !item.result?.url) return;
+        if (item.metaState === 'loading') return;
+        enqueueMeta(id);
+        await metaChain;
+      },
+
+      updateMeta: (id, patch) => {
+        useStore.setState((s) => ({
+          items: s.items.map((it) =>
+            it.id === id && it.meta ? { ...it, meta: { ...it.meta, ...patch, aiGenerated: false } } : it
+          ),
+        }));
+      },
     }),
     {
       name: 'pixelforge-settings',
@@ -860,10 +954,64 @@ export async function downloadAllAsZip() {
     }
     const out = await zip.generateAsync({ type: 'blob' });
     const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
-    downloadBlob(out, `pixelforge_${stamp}.zip`);
+    downloadBlob(out, `stockprep_${stamp}.zip`);
     toast.success(`ZIP ready. ${formatBytes(out.size)}`, { id: t });
   } catch (err) {
     console.error(err);
     toast.error('Could not build the ZIP archive', { id: t });
+  }
+}
+
+/**
+ * Builds the Adobe Stock submission package:
+ *   images/*.jpg                    every included result as submission JPEG
+ *   adobe-stock-metadata.csv        Filename, Title, Keywords, Category
+ *   README.txt                      three step upload reminder
+ */
+export async function exportAdobePackage(): Promise<void> {
+  const { items } = useStore.getState();
+  const done = items.filter((i) => i.status === 'done' && i.result && i.zip !== false);
+  if (!done.length) return;
+  const { toast } = await import('sonner');
+  const t = toast.loading(`Packing ${done.length} image${done.length > 1 ? 's' : ''}…`);
+  try {
+    const JSZip = (await import('jszip')).default;
+    const zip = new JSZip();
+    const imgFolder = zip.folder('images');
+    const rows: { filename: string; title: string; keywords: string[]; category: number }[] = [];
+    const used = new Set<string>();
+    let unnamed = 0;
+    for (const item of done) {
+      const r = item.result!;
+      let filename = `${slugify(item.name)}.jpg`;
+      let i = 2;
+      while (used.has(filename)) filename = `${slugify(item.name)}-${i++}.jpg`;
+      used.add(filename);
+      const blob = await toJpegBlob(r.url);
+      imgFolder?.file(filename, blob);
+      const meta = item.meta;
+      if (!meta) unnamed++;
+      rows.push({
+        filename,
+        title: meta?.title.trim() || slugify(item.name),
+        keywords: meta ? meta.keywords.slice(0, 49) : [],
+        category: meta?.category ?? 0,
+      });
+    }
+    zip.file('adobe-stock-metadata.csv', buildStockCsv(rows));
+    zip.file('README.txt', STOCK_README);
+    const out = await zip.generateAsync({ type: 'blob' });
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
+    downloadBlob(out, `adobe-stock_${stamp}.zip`);
+    toast.success('Adobe Stock package ready', {
+      id: t,
+      description:
+        unnamed > 0
+          ? `${unnamed} image${unnamed > 1 ? 's' : ''} without metadata use filename placeholders.`
+          : `${done.length} JPEG files plus the metadata CSV.`,
+    });
+  } catch (err) {
+    console.error(err);
+    toast.error('Could not build the package', { id: t });
   }
 }

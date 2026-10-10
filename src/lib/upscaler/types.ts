@@ -1,6 +1,9 @@
 /** Shared types for Upscaler Pro. Processing happens server side. */
+import type { PixelStats, StockMeta } from './stock';
 
-export type EngineChoice = 'standard' | 'ai';
+export type { PixelStats, StockMeta } from './stock';
+
+export type EngineChoice = 'standard' | 'ai' | 'glm';
 export type ScaleFactor = 2 | 3 | 4 | 8;
 export type OutputFormat = 'jpeg' | 'png' | 'webp';
 export type FormatChoice = OutputFormat | 'auto';
@@ -72,4 +75,11 @@ export interface QueueItem {
   optimized?: boolean;
   /** transient upload / download rate hint (e.g. "1.2 MB/s") */
   speed?: string;
+  /** Adobe Stock metadata (AI generated, user editable) */
+  meta?: StockMeta;
+  /** lifecycle of the AI metadata generation */
+  metaState?: 'idle' | 'loading' | 'ready' | 'error';
+  metaError?: string;
+  /** pixel quality measurements of the result */
+  stats?: PixelStats;
 }

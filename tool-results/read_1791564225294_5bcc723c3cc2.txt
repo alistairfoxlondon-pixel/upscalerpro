@@ -1,0 +1,692 @@
+     1→'use client';
+     2→
+     3→import * as React from 'react';
+     4→import {
+     5→  Download,
+     6→  Eye,
+     7→  History,
+     8→  Keyboard,
+     9→  LayoutGrid,
+    10→  LayoutList,
+    11→  Loader2,
+    12→  Pause,
+    13→  Play,
+    14→  RefreshCw,
+    15→  RotateCcw,
+    16→  Timer,
+    17→  Trash2,
+    18→  FileArchive,
+    19→  X,
+    20→  CircleCheck,
+    21→  CircleAlert,
+    22→  Ban,
+    23→  Clock,
+    24→  Cpu,
+    25→  Copy,
+    26→} from 'lucide-react';
+    27→import { Button } from '@/components/ui/button';
+    28→import { Progress } from '@/components/ui/progress';
+    29→import { Badge } from '@/components/ui/badge';
+    30→import { Checkbox } from '@/components/ui/checkbox';
+    31→import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+    32→import { PRESETS } from '@/lib/upscaler/registry';
+    33→import {
+    34→  downloadAllAsZip,
+    35→  downloadBlob,
+    36→  resultFilename,
+    37→  useStore,
+    38→} from '@/lib/upscaler/store';
+    39→import { formatBytes, formatDuration, copyImageToClipboard } from '@/lib/upscaler/utils';
+    40→import { openShortcuts } from './keyboard-shortcuts';
+    41→import type { QueueItem } from '@/lib/upscaler/store';
+    42→import { cn } from '@/lib/utils';
+    43→
+    44→const statusStyle: Record<QueueItem['status'], string> = {
+    45→  queued: 'bg-muted text-muted-foreground',
+    46→  processing: 'bg-primary/15 text-primary',
+    47→  done: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
+    48→  error: 'bg-red-500/15 text-red-600 dark:text-red-400',
+    49→  canceled: 'bg-muted text-muted-foreground line-through',
+    50→};
+    51→
+    52→const statusIcon: Record<QueueItem['status'], React.ReactNode> = {
+    53→  queued: <Clock className="h-3 w-3" aria-hidden />,
+    54→  processing: <Loader2 className="h-3 w-3 animate-spin" aria-hidden />,
+    55→  done: <CircleCheck className="h-3 w-3" aria-hidden />,
+    56→  error: <CircleAlert className="h-3 w-3" aria-hidden />,
+    57→  canceled: <Ban className="h-3 w-3" aria-hidden />,
+    58→};
+    59→
+    60→function StatusChip({ item }: { item: QueueItem }) {
+    61→  return (
+    62→    <span
+    63→      className={cn(
+    64→        'inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium',
+    65→        statusStyle[item.status],
+    66→        item.status === 'done' && 'pf-pop'
+    67→      )}
+    68→    >
+    69→      {statusIcon[item.status]}
+    70→      {item.phase}
+    71→    </span>
+    72→  );
+    73→}
+    74→
+    75→function ProgressRing({ progress }: { progress: number }) {
+    76→  return (
+    77→    <svg
+    78→      viewBox="0 0 60 60"
+    79→      aria-hidden
+    80→      className="pointer-events-none absolute -inset-[3px] -rotate-90 text-primary"
+    81→    >
+    82→      <circle cx="30" cy="30" r="28" fill="none" stroke="currentColor" strokeOpacity="0.2" strokeWidth="3" />
+    83→      <circle
+    84→        cx="30"
+    85→        cy="30"
+    86→        r="28"
+    87→        fill="none"
+    88→        stroke="currentColor"
+    89→        strokeWidth="3"
+    90→        strokeLinecap="round"
+    91→        strokeDasharray={2 * Math.PI * 28}
+    92→        strokeDashoffset={2 * Math.PI * 28 * (1 - progress)}
+    93→        className="transition-[stroke-dashoffset] duration-200"
+    94→      />
+    95→    </svg>
+    96→  );
+    97→}
+    98→
+    99→/**
+   100→ * Live AI patch mosaic — every cell is one 128px patch the neural engine has
+   101→ * finished. Giant grids (>220 patches) fall back to a sampled 16×12 mosaic so
+   102→ * DOM size stays bounded while the look stays accurate.
+   103→ */
+   104→function PatchGrid({ patch }: { patch: NonNullable<QueueItem['patch']> }) {
+   105→  const total = patch.cols * patch.rows;
+   106→  if (total <= 1) return null;
+   107→  const sampled = total > 220 ? { cols: 16, rows: 12 } : { cols: patch.cols, rows: patch.rows };
+   108→  const shownTotal = sampled.cols * sampled.rows;
+   109→  const doneShown = Math.min(shownTotal, Math.round((patch.done / total) * shownTotal));
+   110→  const cells: React.ReactNode[] = [];
+   111→  for (let i = 0; i < shownTotal; i++) {
+   112→    const isDone = i < doneShown;
+   113→    cells.push(
+   114→      <span
+   115→        key={i}
+   116→        aria-hidden
+   117→        className={cn(
+   118→          'rounded-[1px]',
+   119→          isDone ? 'pf-patch-cell bg-primary/80 shadow-[0_0_4px] shadow-primary/40' : 'bg-foreground/10'
+   120→        )}
+   121→      />
+   122→    );
+   123→  }
+   124→  return (
+   125→    <div
+   126→      className="pointer-events-none absolute inset-1.5 grid gap-[2px] p-0"
+   127→      style={{
+   128→        gridTemplateColumns: `repeat(${sampled.cols}, minmax(0,1fr))`,
+   129→        gridTemplateRows: `repeat(${sampled.rows}, minmax(0,1fr))`,
+   130→      }}
+   131→    >
+   132→      {cells}
+   133→    </div>
+   134→  );
+   135→}
+   136→
+   137→function ZipToggle({ item, className }: { item: QueueItem; className?: string }) {
+   138→  const toggleZip = useStore((s) => s.toggleZip);
+   139→  const included = item.zip !== false;
+   140→  return (
+   141→    <label
+   142→      className={cn(
+   143→        'inline-flex cursor-pointer items-center gap-1.5 rounded-md bg-background/80 px-1.5 py-1 backdrop-blur-sm',
+   144→        className
+   145→      )}
+   146→      title={included ? 'Included in ZIP export' : 'Excluded from ZIP export'}
+   147→    >
+   148→      <Checkbox
+   149→        checked={included}
+   150→        onCheckedChange={() => toggleZip(item.id)}
+   151→        aria-label={`Include ${item.name} in ZIP export`}
+   152→        className="h-3.5 w-3.5"
+   153→      />
+   154→      <span className="font-mono text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+   155→        zip
+   156→      </span>
+   157→    </label>
+   158→  );
+   159→}
+   160→
+   161→function ItemActions({ item }: { item: QueueItem }) {
+   162→  const removeItem = useStore((s) => s.removeItem);
+   163→  const retry = useStore((s) => s.retry);
+   164→  const setCompare = useStore((s) => s.setCompare);
+   165→  const r = item.result;
+   166→
+   167→  return (
+   168→    <div className="flex shrink-0 items-center gap-0.5">
+   169→      {r && item.status === 'done' && (
+   170→        <>
+   171→          <TooltipProvider delayDuration={200}>
+   172→            <Tooltip>
+   173→              <TooltipTrigger asChild>
+   174→                <Button
+   175→                  variant="ghost"
+   176→                  size="icon"
+   177→                  className="h-8 w-8"
+   178→                  aria-label={`Compare ${item.name}`}
+   179→                  onClick={() => setCompare(item.id)}
+   180→                >
+   181→                  <Eye className="h-4 w-4" aria-hidden />
+   182→                </Button>
+   183→              </TooltipTrigger>
+   184→              <TooltipContent>Compare before / after</TooltipContent>
+   185→            </Tooltip>
+   186→            <Tooltip>
+   187→              <TooltipTrigger asChild>
+   188→                <Button
+   189→                  variant="ghost"
+   190→                  size="icon"
+   191→                  className="h-8 w-8"
+   192→                  aria-label={`Copy ${item.name} to clipboard`}
+   193→                  onClick={() => {
+   194→                    void (async () => {
+   195→                      try {
+   196→                        await copyImageToClipboard(r.url);
+   197→                        const { toast } = await import('sonner');
+   198→                        toast.success('Copied to clipboard');
+   199→                      } catch (err) {
+   200→                        const { toast } = await import('sonner');
+   201→                        toast.error('Could not copy', {
+   202→                          description: err instanceof Error ? err.message : 'Clipboard unavailable',
+   203→                        });
+   204→                      }
+   205→                    })();
+   206→                  }}
+   207→                >
+   208→                  <Copy className="h-4 w-4" aria-hidden />
+   209→                </Button>
+   210→              </TooltipTrigger>
+   211→              <TooltipContent>Copy to clipboard</TooltipContent>
+   212→            </Tooltip>
+   213→          </TooltipProvider>
+   214→          <Button
+   215→            variant="ghost"
+   216→            size="icon"
+   217→            className="h-8 w-8"
+   218→            aria-label={`Download ${item.name}`}
+   219→            title="Download"
+   220→            onClick={() => {
+   221→              void (async () => {
+   222→                const blob = await (await fetch(r.url)).blob();
+   223→                downloadBlob(blob, resultFilename(item.name, r.scale, r.format));
+   224→              })();
+   225→            }}
+   226→          >
+   227→            <Download className="h-4 w-4" aria-hidden />
+   228→          </Button>
+   229→        </>
+   230→      )}
+   231→      {item.status === 'done' && item.file && (
+   232→        <TooltipProvider delayDuration={200}>
+   233→          <Tooltip>
+   234→            <TooltipTrigger asChild>
+   235→              <Button
+   236→                variant="ghost"
+   237→                size="icon"
+   238→                className="h-8 w-8"
+   239→                aria-label={`Re-upscale ${item.name} with current settings`}
+   240→                onClick={() => retry(item.id)}
+   241→              >
+   242→                <RefreshCw className="h-4 w-4" aria-hidden />
+   243→              </Button>
+   244→            </TooltipTrigger>
+   245→            <TooltipContent>Re-upscale with current settings</TooltipContent>
+   246→          </Tooltip>
+   247→        </TooltipProvider>
+   248→      )}
+   249→      {(item.status === 'error' || item.status === 'canceled') && item.file && (
+   250→        <Button
+   251→          variant="ghost"
+   252→          size="icon"
+   253→          className="h-8 w-8"
+   254→          aria-label={`Retry ${item.name}`}
+   255→          title="Retry"
+   256→          onClick={() => retry(item.id)}
+   257→        >
+   258→          <RotateCcw className="h-4 w-4" aria-hidden />
+   259→        </Button>
+   260→      )}
+   261→      <Button
+   262→        variant="ghost"
+   263→        size="icon"
+   264→        className="h-8 w-8 text-muted-foreground hover:text-destructive"
+   265→        aria-label={`Remove ${item.name}`}
+   266→        title="Remove"
+   267→        onClick={() => removeItem(item.id)}
+   268→      >
+   269→        <Trash2 className="h-4 w-4" aria-hidden />
+   270→      </Button>
+   271→    </div>
+   272→  );
+   273→}
+   274→
+   275→function buildMeta(item: QueueItem): string {
+   276→  const r = item.result;
+   277→  const meta: string[] = [];
+   278→  if (item.w) meta.push(`${item.w}×${item.h}`);
+   279→  if (r) meta.push(`→ ${r.w}×${r.h}`);
+   280→  if (item.sizeIn) meta.push(formatBytes(item.sizeIn));
+   281→  if (r && r.size > 0) meta.push(`→ ${formatBytes(r.size)}`);
+   282→  if (r && r.ms > 0) meta.push(formatDuration(r.ms));
+   283→  return meta.join(' · ');
+   284→}
+   285→
+   286→function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
+   287→  const r = item.result;
+   288→  const excluded = item.status === 'done' && item.zip === false;
+   289→
+   290→  return (
+   291→    <li
+   292→      style={{ ['--i' as string]: index }}
+   293→      className={cn(
+   294→        'pf-rise group flex items-center gap-3 rounded-xl border bg-card/60 p-3 transition-all duration-200 hover:-translate-y-px hover:border-primary/40 hover:bg-card hover:shadow-md',
+   295→        item.status === 'processing' && 'border-primary/40 bg-primary/5 shadow-[0_0_24px_-12px] shadow-primary/50',
+   296→        item.status === 'error' && 'border-red-500/30',
+   297→        excluded && 'opacity-55'
+   298→      )}
+   299→    >
+   300→      {/* ZIP selection for finished items */}
+   301→      {item.status === 'done' && <ZipToggle item={item} />}
+   302→
+   303→      {/* thumbnail + progress ring + patch mosaic */}
+   304→      <div className="relative h-14 w-14 shrink-0">
+   305→        <div className="h-full w-full overflow-hidden rounded-lg border bg-muted/40">
+   306→        {item.thumbUrl ? (
+   307→          <img
+   308→              src={item.thumbUrl}
+   309→              alt=""
+   310→              className={cn(
+   311→                'h-full w-full object-cover transition-all duration-500',
+   312→                item.status === 'processing' && 'scale-105 blur-[1px] brightness-90'
+   313→              )}
+   314→            />
+   315→        ) : (
+   316→          <div className="flex h-full w-full items-center justify-center text-muted-foreground">
+   317→            <X className="h-4 w-4" aria-hidden />
+   318→          </div>
+   319→        )}
+   320→          {item.status === 'processing' && item.patch && <PatchGrid patch={item.patch} />}
+   321→          {r && (
+   322→            <span className="absolute bottom-0 right-0 flex">
+   323→              <span className="bg-black/60 px-1 py-px font-mono text-[9px] font-semibold text-white">
+   324→                {r.format.toUpperCase()}
+   325→              </span>
+   326→              <span className="bg-primary px-1 py-px font-mono text-[9px] font-semibold text-primary-foreground">
+   327→                {r.scale}×
+   328→              </span>
+   329→            </span>
+   330→          )}
+   331→        </div>
+   332→        {item.status === 'processing' && <ProgressRing progress={item.progress} />}
+   333→      </div>
+   334→
+   335→      {/* main */}
+   336→      <div className="min-w-0 flex-1">
+   337→        <div className="flex items-center gap-2">
+   338→          <p className="truncate text-sm font-medium" title={item.name}>
+   339→            {item.name}
+   340→          </p>
+   341→          {item.restored && (
+   342→            <TooltipProvider delayDuration={200}>
+   343→              <Tooltip>
+   344→                <TooltipTrigger asChild>
+   345→                  <span className="shrink-0 text-muted-foreground/70" aria-label="Restored from your last session">
+   346→                    <History className="h-3.5 w-3.5" aria-hidden />
+   347→                  </span>
+   348→                </TooltipTrigger>
+   349→                <TooltipContent className="max-w-56">
+   350→                  Restored from your last session — the original file isn&apos;t kept, so re-upscaling needs a fresh drop.
+   351→                </TooltipContent>
+   352→              </Tooltip>
+   353→            </TooltipProvider>
+   354→          )}
+   355→          <StatusChip item={item} />
+   356→        </div>
+   357→
+   358→        <p className="mt-0.5 truncate text-[11px] text-muted-foreground tabular-nums">
+   359→          {buildMeta(item) || item.mime}
+   360→        </p>
+   361→
+   362→        {item.status === 'processing' && (
+   363→          <div className="mt-1.5 flex items-center gap-2">
+   364→            <Progress
+   365→              value={item.progress * 100}
+   366→              className="h-1.5 pf-stripes"
+   367→              aria-label={`${item.name} progress`}
+   368→            />
+   369→            <span className="w-9 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
+   370→              {Math.round(item.progress * 100)}%
+   371→            </span>
+   372→          </div>
+   373→        )}
+   374→        {item.status === 'error' && item.error && (
+   375→          <p className="mt-0.5 truncate text-[11px] text-red-500">{item.error}</p>
+   376→        )}
+   377→      </div>
+   378→
+   379→      <ItemActions item={item} />
+   380→    </li>
+   381→  );
+   382→}
+   383→
+   384→function QueueCard({ item, index }: { item: QueueItem; index: number }) {
+   385→  const r = item.result;
+   386→  const excluded = item.status === 'done' && item.zip === false;
+   387→
+   388→  return (
+   389→    <li
+   390→      style={{ ['--i' as string]: Math.min(index, 11) }}
+   391→      className={cn(
+   392→        'pf-rise group flex flex-col gap-2 rounded-xl border bg-card/60 p-2.5 transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/40 hover:bg-card hover:shadow-md',
+   393→        item.status === 'processing' && 'border-primary/40 bg-primary/5 shadow-[0_0_24px_-12px] shadow-primary/50',
+   394→        item.status === 'error' && 'border-red-500/30',
+   395→        excluded && 'opacity-55'
+   396→      )}
+   397→    >
+   398→      {/* thumbnail stage */}
+   399→      <div className="relative aspect-square w-full overflow-hidden rounded-lg border bg-muted/40 bg-[repeating-conic-gradient(var(--border)_0%_25%,transparent_0%_50%)] bg-[length:12px_12px]">
+   400→        {item.thumbUrl ? (
+   401→          <img
+   402→            src={item.thumbUrl}
+   403→            alt=""
+   404→            className={cn(
+   405→              'h-full w-full object-contain p-1 transition-all duration-500',
+   406→              item.status === 'processing' && 'scale-105 blur-[1px] brightness-90'
+   407→            )}
+   408→          />
+   409→        ) : (
+   410→          <div className="flex h-full w-full items-center justify-center bg-background/60 text-muted-foreground">
+   411→            <X className="h-5 w-5" aria-hidden />
+   412→          </div>
+   413→        )}
+   414→
+   415→        {item.status === 'processing' && item.patch && <PatchGrid patch={item.patch} />}
+   416→
+   417→        {/* badges */}
+   418→        {r && (
+   419→          <span className="absolute left-1.5 top-1.5 flex items-center gap-1">
+   420→            <span className="rounded-md bg-primary px-1.5 py-px font-mono text-[9px] font-semibold text-primary-foreground shadow-sm">
+   421→              {r.scale}×
+   422→            </span>
+   423→            <span className="rounded-md bg-black/60 px-1 py-px font-mono text-[9px] font-semibold text-white backdrop-blur-sm">
+   424→              {r.format.toUpperCase()}
+   425→            </span>
+   426→          </span>
+   427→        )}
+   428→
+   429→        {/* status chip overlays the top when not done */}
+   430→        {item.status !== 'done' && (
+   431→          <span className="absolute right-1.5 top-1.5">
+   432→            <StatusChip item={item} />
+   433→          </span>
+   434→        )}
+   435→
+   436→        {/* ZIP selection for finished items */}
+   437→        {item.status === 'done' && <ZipToggle item={item} className="absolute right-1.5 top-1.5" />}
+   438→
+   439→        {/* centered progress ring while processing */}
+   440→        {item.status === 'processing' && (
+   441→          <div className="absolute inset-0 flex items-center justify-center bg-background/30 backdrop-blur-[1px]">
+   442→            <div className="relative h-12 w-12">
+   443→              <ProgressRing progress={item.progress} />
+   444→              <span className="absolute inset-0 flex items-center justify-center font-mono text-[10px] font-semibold tabular-nums text-foreground">
+   445→                {Math.round(item.progress * 100)}
+   446→              </span>
+   447→            </div>
+   448→          </div>
+   449→        )}
+   450→
+   451→        {/* hover compare affordance */}
+   452→        {r && item.status === 'done' && (
+   453→          <button
+   454→            type="button"
+   455→            aria-label={`Compare ${item.name}`}
+   456→            onClick={() => useStore.getState().setCompare(item.id)}
+   457→            className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all duration-200 hover:bg-black/40 hover:opacity-100 focus-visible:opacity-100"
+   458→          >
+   459→            <Eye className="h-6 w-6 text-white drop-shadow" aria-hidden />
+   460→          </button>
+   461→        )}
+   462→      </div>
+   463→
+   464→      {/* info */}
+   465→      <div className="min-w-0 space-y-0.5 px-0.5">
+   466→        <p className="flex items-center gap-1 truncate text-xs font-medium" title={item.name}>
+   467→          {item.restored && <History className="h-3 w-3 shrink-0 text-muted-foreground/70" aria-hidden />}
+   468→          <span className="truncate">{item.name}</span>
+   469→        </p>
+   470→        <p className="truncate text-[10px] text-muted-foreground tabular-nums">
+   471→          {buildMeta(item) || item.mime}
+   472→        </p>
+   473→        {item.status === 'processing' && (
+   474→          <div className="flex items-center gap-1.5 pt-0.5">
+   475→            <Progress
+   476→              value={item.progress * 100}
+   477→              className="h-1 pf-stripes"
+   478→              aria-label={`${item.name} progress`}
+   479→            />
+   480→          </div>
+   481→        )}
+   482→        {item.status === 'error' && item.error && (
+   483→          <p className="truncate text-[10px] text-red-500" title={item.error}>
+   484→            {item.error}
+   485→          </p>
+   486→        )}
+   487→      </div>
+   488→
+   489→      <div className="-mx-0.5 flex justify-end border-t border-border/50 pt-1.5">
+   490→        <ItemActions item={item} />
+   491→      </div>
+   492→    </li>
+   493→  );
+   494→}
+   495→
+   496→export function Queue() {
+   497→  const items = useStore((s) => s.items);
+   498→  const busy = useStore((s) => s.busy);
+   499→  const paused = useStore((s) => s.paused);
+   500→  const togglePause = useStore((s) => s.togglePause);
+   501→  const clearFinished = useStore((s) => s.clearFinished);
+   502→  const clearAll = useStore((s) => s.clearAll);
+   503→  const backend = useStore((s) => s.backend);
+   504→  const gpu = useStore((s) => s.gpu);
+   505→  const totals = useStore((s) => s.totals);
+   506→  const settings = useStore((s) => s.settings);
+   507→  const setSettings = useStore((s) => s.setSettings);
+   508→  const view = settings.queueView;
+   509→
+   510→  const doneCount = items.filter((i) => i.status === 'done').length;
+   511→  const queuedCount = items.filter((i) => i.status === 'queued').length;
+   512→  const zipCount = items.filter((i) => i.status === 'done' && i.result && i.zip !== false).length;
+   513→  const active = items.find((i) => i.status === 'processing');
+   514→  const overall =
+   515→    items.length === 0
+   516→      ? 0
+   517→      : (doneCount + (active ? active.progress : 0)) / items.length;
+   518→
+   519→  const hasDone = doneCount > 0;
+   520→  const hasQueued = queuedCount > 0;
+   521→
+   522→  // rough ETA from the session average — only meaningful once ≥1 image finished
+   523→  const avgMs = totals.images > 0 ? totals.ms / totals.images : 0;
+   524→  const eta = busy && !paused && hasQueued && avgMs > 0 ? avgMs * (queuedCount + (active ? 1 - active.progress : 0)) : 0;
+   525→
+   526→  return (
+   527→    <div className="space-y-3">
+   528→      {/* batch bar */}
+   529→      <div
+   530→        className={cn(
+   531→          'rounded-xl border bg-card/60 p-3 transition-colors',
+   532→          paused && busy && 'border-amber-500/40 bg-amber-500/5'
+   533→        )}
+   534→      >
+   535→        <div className="flex flex-wrap items-center gap-2">
+   536→          <div className="flex flex-wrap items-center gap-2">
+   537→            {busy && !paused && (
+   538→              <Button size="sm" variant="outline" className="h-8 gap-1.5" onClick={togglePause} disabled={!hasQueued}>
+   539→                <Pause className="h-3.5 w-3.5" aria-hidden />
+   540→                Pause
+   541→              </Button>
+   542→            )}
+   543→            {paused && (
+   544→              <Button
+   545→                size="sm"
+   546→                variant="outline"
+   547→                className="h-8 gap-1.5"
+   548→                onClick={togglePause}
+   549→                disabled={!hasQueued}
+   550→              >
+   551→                <Play className="h-3.5 w-3.5" aria-hidden />
+   552→                Resume
+   553→              </Button>
+   554→            )}
+   555→            <TooltipProvider delayDuration={200}>
+   556→              <Tooltip>
+   557→                <TooltipTrigger asChild>
+   558→                  <Button
+   559→                    size="sm"
+   560→                    variant="outline"
+   561→                    className="h-8 gap-1.5"
+   562→                    onClick={() => void downloadAllAsZip()}
+   563→                    disabled={zipCount === 0}
+   564→                  >
+   565→                    <FileArchive className="h-3.5 w-3.5" aria-hidden />
+   566→                    ZIP all
+   567→                    <span className="font-mono text-[10px] text-muted-foreground">
+   568→                      ({zipCount}
+   569→                      {hasDone && zipCount !== doneCount ? `/${doneCount}` : ''})
+   570→                    </span>
+   571→                  </Button>
+   572→                </TooltipTrigger>
+   573→                {hasDone && zipCount !== doneCount && (
+   574→                  <TooltipContent>Deselect items with the ZIP checkboxes to skip them</TooltipContent>
+   575→                )}
+   576→              </Tooltip>
+   577→            </TooltipProvider>
+   578→            <Button size="sm" variant="ghost" className="h-8" onClick={clearFinished} disabled={!items.some((i) => i.status !== 'queued' && i.status !== 'processing')}>
+   579→              Clear finished
+   580→            </Button>
+   581→            <Button size="sm" variant="ghost" className="h-8 text-muted-foreground hover:text-destructive" onClick={clearAll}>
+   582→              <Trash2 className="h-3.5 w-3.5" aria-hidden />
+   583→              Clear all
+   584→            </Button>
+   585→          </div>
+   586→
+   587→          <div className="ml-auto flex items-center gap-2">
+   588→            {eta > 0 && (
+   589→              <Badge
+   590→                variant="outline"
+   591→                className="gap-1 font-mono text-[10px] tabular-nums text-muted-foreground"
+   592→                title={`Based on the ${formatDuration(avgMs)} average of this session`}
+   593→              >
+   594→                <Timer className="h-3 w-3" aria-hidden />
+   595→                ~{formatDuration(eta)} left
+   596→              </Badge>
+   597→            )}
+   598→            {backend && (
+   599→              <Badge
+   600→                variant="outline"
+   601→                className="gap-1 font-mono text-[10px] text-muted-foreground"
+   602→                title={gpu ? `GPU: ${gpu}` : undefined}
+   603→              >
+   604→                <Cpu className="h-3 w-3" aria-hidden />
+   605→                {backend === 'webgl' ? 'WebGL' : backend.toUpperCase()}
+   606→              </Badge>
+   607→            )}
+   608→            <Badge variant="outline" className="font-mono text-[10px] tabular-nums text-muted-foreground">
+   609→              {doneCount}/{items.length} done
+   610→              {totals.ms > 0 && ` · ${formatDuration(totals.ms)} total`}
+   611→            </Badge>
+   612→            {/* shortcuts + view switch */}
+   613→            <div className="flex items-center gap-1">
+   614→              <TooltipProvider delayDuration={200}>
+   615→                <Tooltip>
+   616→                  <TooltipTrigger asChild>
+   617→                    <button
+   618→                      type="button"
+   619→                      aria-label="Keyboard shortcuts"
+   620→                      title="Keyboard shortcuts (?)"
+   621→                      onClick={openShortcuts}
+   622→                      className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+   623→                    >
+   624→                      <Keyboard className="h-3.5 w-3.5" aria-hidden />
+   625→                    </button>
+   626→                  </TooltipTrigger>
+   627→                  <TooltipContent>Keyboard shortcuts</TooltipContent>
+   628→                </Tooltip>
+   629→              </TooltipProvider>
+   630→              <div className="flex items-center rounded-lg border p-0.5" role="group" aria-label="Queue layout">
+   631→                <button
+   632→                  type="button"
+   633→                  aria-label="List view"
+   634→                  aria-pressed={view === 'list'}
+   635→                  title="List view (V)"
+   636→                  onClick={() => setSettings({ queueView: 'list' })}
+   637→                  className={cn(
+   638→                    'flex h-7 w-8 items-center justify-center rounded-md transition-colors',
+   639→                    view === 'list' ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+   640→                  )}
+   641→                >
+   642→                  <LayoutList className="h-3.5 w-3.5" aria-hidden />
+   643→                </button>
+   644→                <button
+   645→                  type="button"
+   646→                  aria-label="Grid view"
+   647→                  aria-pressed={view === 'grid'}
+   648→                  title="Grid view (V)"
+   649→                  onClick={() => setSettings({ queueView: 'grid' })}
+   650→                  className={cn(
+   651→                    'flex h-7 w-8 items-center justify-center rounded-md transition-colors',
+   652→                    view === 'grid' ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+   653→                  )}
+   654→                >
+   655→                  <LayoutGrid className="h-3.5 w-3.5" aria-hidden />
+   656→                </button>
+   657→              </div>
+   658→            </div>
+   659→          </div>
+   660→        </div>
+   661→
+   662→        <div className="mt-2.5 flex items-center gap-2">
+   663→          <Progress value={overall * 100} className="h-1.5" aria-label="Overall batch progress" />
+   664→          <span className="w-9 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
+   665→            {Math.round(overall * 100)}%
+   666→          </span>
+   667→        </div>
+   668→        {paused && busy && (
+   669→          <p className="mt-1.5 text-[11px] text-amber-500">
+   670→            Paused — the current image will finish, queued ones wait.
+   671→          </p>
+   672→        )}
+   673→      </div>
+   674→
+   675→      {/* items */}
+   676→      {view === 'list' ? (
+   677→        <ul className="max-h-[52vh] space-y-2 overflow-y-auto pr-1 fancy-scroll" role="list">
+   678→          {items.map((item, i) => (
+   679→            <QueueItemRow key={item.id} item={item} index={i} />
+   680→          ))}
+   681→        </ul>
+   682→      ) : (
+   683→        <ul className="max-h-[58vh] grid grid-cols-2 gap-2.5 overflow-y-auto pr-1 fancy-scroll sm:grid-cols-3 xl:grid-cols-4" role="list">
+   684→          {items.map((item, i) => (
+   685→            <QueueCard key={item.id} item={item} index={i} />
+   686→          ))}
+   687→        </ul>
+   688→      )}
+   689→    </div>
+   690→  );
+   691→}
+   692→

@@ -54,10 +54,10 @@ export function SettingsPanel() {
           Settings
           <Badge variant="outline" className="gap-1 font-mono text-[10px] text-muted-foreground">
             <MaterialIcon
-              name={settings.engine === 'ai' ? 'neurology' : 'speed'}
+              name={settings.engine === 'ai' ? 'neurology' : settings.engine === 'glm' ? 'psychology' : 'speed'}
               size={12}
             />
-            {settings.engine === 'ai' ? 'AI' : 'Standard'} ·{' '}
+            {settings.engine === 'ai' ? 'AI Detail' : settings.engine === 'glm' ? 'GLM' : 'Standard'} ·{' '}
             {isTarget ? `${settings.targetSide}px` : `${settings.scale}x`}
           </Badge>
         </CardTitle>
@@ -88,11 +88,21 @@ export function SettingsPanel() {
               <MaterialIcon name="neurology" size={18} className="text-primary" />
               AI Detail
             </ToggleGroupItem>
+            <ToggleGroupItem
+              value="glm"
+              aria-label="GLM engine, generative enhancement"
+              className="flex-1 flex-col gap-0.5 rounded-md border px-1 py-2 text-xs data-[state=on]:border-primary data-[state=on]:bg-primary/10"
+            >
+              <MaterialIcon name="psychology" size={18} className="text-primary" />
+              GLM AI
+            </ToggleGroupItem>
           </ToggleGroup>
           <p className="text-[11px] leading-relaxed text-muted-foreground">
             {settings.engine === 'ai'
               ? `Neural detail up to 4x native. Input max ${AI_INPUT_MAX_SIDE} px, larger photos use Standard.`
-              : 'Fast multi pass resampling with edge sharpening. Best for large photos and batches.'}
+              : settings.engine === 'glm'
+                ? 'Generative enhancement through GLM. Any input size, slower, declare as AI content on Adobe Stock.'
+                : 'Fast multi pass resampling with edge sharpening. Best for large photos and batches.'}
           </p>
         </div>
 

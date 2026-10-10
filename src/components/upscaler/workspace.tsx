@@ -9,6 +9,8 @@ import { Queue } from './queue';
 import { CompareModal } from './compare-modal';
 import { WindowDrop } from './window-drop';
 import { KeyboardShortcuts } from './keyboard-shortcuts';
+import { ExportPanel } from './export-panel';
+import { WorkflowSteps } from './workflow-steps';
 
 /** Smoothly animates a number toward its target value. */
 function useCountUp(target: number, duration = 500): number {
@@ -98,7 +100,9 @@ export function Workspace() {
     >
       <div className="grid items-start gap-5 lg:grid-cols-[340px_minmax(0,1fr)]">
         <div className="min-w-0 space-y-4 lg:sticky lg:top-20">
+          <WorkflowSteps />
           <SettingsPanel />
+          <ExportPanel />
           {totals.images > 0 && (
             <div className="rounded-lg bg-secondary p-4 text-xs text-secondary-foreground">
               <p className="mb-2.5 flex items-center justify-between text-sm font-semibold text-foreground">

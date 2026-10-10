@@ -57,13 +57,13 @@ export function InstallButton() {
             size="sm"
             className="h-9 gap-2 text-muted-foreground"
             onClick={() => void install()}
-            aria-label="Install PixelForge as an app"
+            aria-label="Install StockPrep as an app"
           >
             <MaterialIcon name="download" size={17} />
             <span className="hidden text-xs sm:inline">Install</span>
           </Button>
         </TooltipTrigger>
-        <TooltipContent>Install PixelForge, launches like an app</TooltipContent>
+        <TooltipContent>Install StockPrep, launches like an app</TooltipContent>
       </Tooltip>
     </TooltipProvider>
   );
