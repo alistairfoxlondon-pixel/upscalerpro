@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { ChevronsLeftRight, Eye, Minus, Plus, Maximize, Scan } from 'lucide-react';
+import { MaterialIcon } from './material-icon';
 import { cn } from '@/lib/utils';
 import { useRememberedZoom, MIN_ZOOM, MAX_ZOOM } from './use-remembered-zoom';
 
@@ -325,7 +325,7 @@ export function CompareSlider({
               className="absolute left-1/2 top-1/2 flex h-9 w-9 items-center justify-center rounded-full border bg-background/90 shadow-md backdrop-blur transition-transform group-active:scale-95"
               style={{ transform: `translate(-50%, -50%) scale(${1 / zoom})` }}
             >
-              <ChevronsLeftRight className="h-4 w-4 text-foreground" aria-hidden />
+              <MaterialIcon name="swap_horiz" size={16} className="text-foreground" />
             </span>
           </div>
           <div
@@ -370,7 +370,7 @@ export function CompareSlider({
               : 'bg-background/85 text-foreground hover:bg-muted'
           )}
         >
-          <Eye className="h-3.5 w-3.5" aria-hidden />
+          <MaterialIcon name="visibility" size={14} />
           Original
         </button>
 
@@ -388,7 +388,7 @@ export function CompareSlider({
             onPointerDown={(e) => e.stopPropagation()}
             className="flex h-7 w-7 items-center justify-center rounded-md text-foreground transition-colors hover:bg-muted disabled:opacity-40"
           >
-            <Minus className="h-3.5 w-3.5" aria-hidden />
+            <MaterialIcon name="zoom_out" size={16} />
           </button>
           <button
             type="button"
@@ -401,7 +401,7 @@ export function CompareSlider({
             onPointerDown={(e) => e.stopPropagation()}
             className="flex h-7 min-w-14 items-center justify-center gap-1 rounded-md px-1 font-mono text-[10px] tabular-nums text-foreground transition-colors hover:bg-muted"
           >
-            {zoom > 1 ? <Scan className="h-3 w-3" aria-hidden /> : <Maximize className="h-3 w-3" aria-hidden />}
+            {zoom > 1 ? <MaterialIcon name="fit_screen" size={14} /> : <MaterialIcon name="open_in_full" size={14} />}
             {Math.round(zoom * 100)}%
           </button>
           <button
@@ -416,7 +416,7 @@ export function CompareSlider({
             onPointerDown={(e) => e.stopPropagation()}
             className="flex h-7 w-7 items-center justify-center rounded-md text-foreground transition-colors hover:bg-muted disabled:opacity-40"
           >
-            <Plus className="h-3.5 w-3.5" aria-hidden />
+            <MaterialIcon name="zoom_in" size={16} />
           </button>
         </div>
       </div>

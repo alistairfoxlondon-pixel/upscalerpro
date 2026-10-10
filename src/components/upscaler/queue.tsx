@@ -1,29 +1,6 @@
 'use client';
 
 import * as React from 'react';
-import {
-  CircleAlert,
-  CircleCheck,
-  Clock,
-  Cloud,
-  Copy,
-  Download,
-  Eye,
-  FileArchive,
-  Keyboard,
-  LayoutGrid,
-  LayoutList,
-  Loader2,
-  Pause,
-  Play,
-  RefreshCw,
-  RotateCcw,
-  Share2,
-  Timer,
-  Trash2,
-  X,
-  Ban,
-} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
@@ -37,6 +14,7 @@ import {
 } from '@/lib/upscaler/store';
 import { copyImageToClipboard, formatBytes, formatDuration, shareImage } from '@/lib/upscaler/utils';
 import { openShortcuts } from './keyboard-shortcuts';
+import { MaterialIcon } from './material-icon';
 import type { QueueItem } from '@/lib/upscaler/store';
 import { cn } from '@/lib/utils';
 
@@ -49,11 +27,11 @@ const statusStyle: Record<QueueItem['status'], string> = {
 };
 
 const statusIcon: Record<QueueItem['status'], React.ReactNode> = {
-  queued: <Clock className="h-3 w-3" aria-hidden />,
-  processing: <Loader2 className="h-3 w-3 animate-spin" aria-hidden />,
-  done: <CircleCheck className="h-3 w-3" aria-hidden />,
-  error: <CircleAlert className="h-3 w-3" aria-hidden />,
-  canceled: <Ban className="h-3 w-3" aria-hidden />,
+  queued: <MaterialIcon name="schedule" size={13} />,
+  processing: <MaterialIcon name="progress_activity" size={13} className="pf-spin" />,
+  done: <MaterialIcon name="check_circle" size={13} />,
+  error: <MaterialIcon name="error" size={13} />,
+  canceled: <MaterialIcon name="block" size={13} />,
 };
 
 function StatusChip({ item }: { item: QueueItem }) {
@@ -119,12 +97,70 @@ function ZipToggle({ item, className }: { item: QueueItem; className?: string })
   );
 }
 
+/** Applied chip: honest record of what the server actually did. */
+function AppliedChips({ item }: { item: QueueItem }) {
+  const r = item.result;
+  if (!r) return null;
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-1">
+      <span
+        className={cn(
+          'inline-flex items-center gap-0.5 rounded-sm px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide',
+          r.engine === 'ai'
+            ? 'bg-primary text-primary-foreground'
+            : 'bg-secondary text-secondary-foreground'
+        )}
+      >
+        <MaterialIcon name={r.engine === 'ai' ? 'neurology' : 'speed'} size={11} />
+        {r.engine === 'ai' ? 'AI' : 'Standard'}
+      </span>
+      <span className="rounded-sm bg-secondary px-1.5 py-px font-mono text-[9px] font-semibold text-secondary-foreground">
+        {r.target ? `${r.target}px` : `${r.scale}x`}
+      </span>
+      <span className="rounded-sm bg-secondary px-1.5 py-px font-mono text-[9px] text-secondary-foreground">
+        {r.w}×{r.h}
+      </span>
+      {r.size > 0 && (
+        <span className="rounded-sm bg-secondary px-1.5 py-px font-mono text-[9px] text-secondary-foreground">
+          {formatBytes(r.size)}
+        </span>
+      )}
+      {r.ms > 0 && (
+        <span className="rounded-sm bg-secondary px-1.5 py-px font-mono text-[9px] text-secondary-foreground">
+          {formatDuration(r.ms)}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function AppliedNotice({ item }: { item: QueueItem }) {
+  const r = item.result;
+  if (!r) return null;
+  if (r.aiFallback) {
+    return (
+      <p className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground">
+        <MaterialIcon name="info" size={12} className="shrink-0" />
+        Image exceeds the AI size budget, Standard was used.
+      </p>
+    );
+  }
+  if (r.capped) {
+    return (
+      <p className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground">
+        <MaterialIcon name="info" size={12} className="shrink-0" />
+        Requested size exceeds the 8192 px cap, reduced to fit.
+      </p>
+    );
+  }
+  return null;
+}
+
 function ItemActions({ item }: { item: QueueItem }) {
   const removeItem = useStore((s) => s.removeItem);
   const retry = useStore((s) => s.retry);
   const setCompare = useStore((s) => s.setCompare);
   const r = item.result;
-  // Web Share with files: feature-detected once per component mount
   const [canShare] = React.useState(
     () => typeof navigator !== 'undefined' && typeof navigator.canShare === 'function'
   );
@@ -144,81 +180,82 @@ function ItemActions({ item }: { item: QueueItem }) {
     );
   };
 
+  const iconBtn =
+    'h-8 w-8 [&_svg]:pointer-events-none shrink-0 rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50';
+
   return (
     <div className="flex shrink-0 items-center gap-0.5">
       {r && item.status === 'done' && (
-        <>
-          <TooltipProvider delayDuration={200}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
-                  aria-label={`Compare ${item.name}`}
-                  onClick={() => setCompare(item.id)}
-                >
-                  <Eye className="h-4 w-4" aria-hidden />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Compare before and after</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
-                  aria-label={`Copy ${item.name} to clipboard`}
-                  onClick={() => {
-                    void (async () => {
-                      try {
-                        await copyImageToClipboard(r.url);
-                        const { toast } = await import('sonner');
-                        toast.success('Copied to clipboard');
-                      } catch (err) {
-                        const { toast } = await import('sonner');
-                        toast.error('Could not copy', {
-                          description: err instanceof Error ? err.message : 'Clipboard unavailable',
-                        });
-                      }
-                    })();
-                  }}
-                >
-                  <Copy className="h-4 w-4" aria-hidden />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Copy to clipboard</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8"
-            aria-label={`Download ${item.name}`}
-            title="Download"
-            onClick={() => {
-              void (async () => {
-                const blob = await (await fetch(r.url)).blob();
-                downloadBlob(blob, resultFilename(item.name, r.scale, r.format, r.target));
-              })();
-            }}
-          >
-            <Download className="h-4 w-4" aria-hidden />
-          </Button>
-          {canShare && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              aria-label={`Share ${item.name}`}
-              title="Share"
-              onClick={onShare}
-            >
-              <Share2 className="h-4 w-4" aria-hidden />
-            </Button>
-          )}
-        </>
+        <TooltipProvider delayDuration={200}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                className={iconBtn}
+                aria-label={`Compare ${item.name} with the original`}
+                onClick={() => setCompare(item.id)}
+              >
+                <MaterialIcon name="compare" size={18} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>Live compare with the original</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                className={iconBtn}
+                aria-label={`Copy ${item.name} to clipboard`}
+                onClick={() => {
+                  void (async () => {
+                    try {
+                      await copyImageToClipboard(r.url);
+                      const { toast } = await import('sonner');
+                      toast.success('Copied to clipboard');
+                    } catch (err) {
+                      const { toast } = await import('sonner');
+                      toast.error('Could not copy', {
+                        description: err instanceof Error ? err.message : 'Clipboard unavailable',
+                      });
+                    }
+                  })();
+                }}
+              >
+                <MaterialIcon name="content_copy" size={18} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>Copy to clipboard</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      )}
+      {r && item.status === 'done' && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 text-primary hover:text-primary"
+          aria-label={`Download ${item.name}`}
+          title="Download"
+          onClick={() => {
+            void (async () => {
+              const blob = await (await fetch(r.url)).blob();
+              downloadBlob(blob, resultFilename(item.name, r.scale, r.format, r.target));
+            })();
+          }}
+        >
+          <MaterialIcon name="download" size={18} />
+        </Button>
+      )}
+      {r && item.status === 'done' && canShare && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          aria-label={`Share ${item.name}`}
+          title="Share"
+          onClick={onShare}
+        >
+          <MaterialIcon name="share" size={18} />
+        </Button>
       )}
       {item.status === 'done' && item.file && (
         <TooltipProvider delayDuration={200}>
@@ -231,7 +268,7 @@ function ItemActions({ item }: { item: QueueItem }) {
                 aria-label={`Process ${item.name} again with current settings`}
                 onClick={() => retry(item.id)}
               >
-                <RefreshCw className="h-4 w-4" aria-hidden />
+                <MaterialIcon name="refresh" size={18} />
               </Button>
             </TooltipTrigger>
             <TooltipContent>Process again with current settings</TooltipContent>
@@ -247,7 +284,7 @@ function ItemActions({ item }: { item: QueueItem }) {
           title="Retry"
           onClick={() => retry(item.id)}
         >
-          <RotateCcw className="h-4 w-4" aria-hidden />
+          <MaterialIcon name="restart_alt" size={18} />
         </Button>
       )}
       <Button
@@ -258,7 +295,7 @@ function ItemActions({ item }: { item: QueueItem }) {
         title="Remove"
         onClick={() => removeItem(item.id)}
       >
-        <Trash2 className="h-4 w-4" aria-hidden />
+        <MaterialIcon name="delete" size={18} />
       </Button>
     </div>
   );
@@ -267,11 +304,9 @@ function ItemActions({ item }: { item: QueueItem }) {
 function buildMeta(item: QueueItem): string {
   const r = item.result;
   const meta: string[] = [];
-  if (item.w) meta.push(`${item.w}x${item.h}`);
-  if (r) meta.push(`→ ${r.w}x${r.h}`);
+  if (item.w) meta.push(`${item.w}×${item.h}`);
   if (item.sizeIn) meta.push(formatBytes(item.sizeIn));
-  if (r && r.size > 0) meta.push(`→ ${formatBytes(r.size)}`);
-  if (r && r.ms > 0) meta.push(formatDuration(r.ms));
+  if (r && r.size > 0 && r.ms > 0) meta.push(formatDuration(r.ms));
   return meta.join(' · ');
 }
 
@@ -289,7 +324,6 @@ function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
         excluded && 'opacity-55'
       )}
     >
-      {/* ZIP selection for finished items */}
       {item.status === 'done' && <ZipToggle item={item} />}
 
       {/* thumbnail + progress ring */}
@@ -306,18 +340,8 @@ function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
             />
           ) : (
             <div className="flex h-full w-full items-center justify-center text-muted-foreground">
-              <X className="h-4 w-4" aria-hidden />
+              <MaterialIcon name="close" size={16} />
             </div>
-          )}
-          {r && (
-            <span className="absolute bottom-0 right-0 flex">
-              <span className="bg-black/60 px-1 py-px font-mono text-[9px] font-semibold text-white">
-                {r.format.toUpperCase()}
-              </span>
-              <span className="bg-primary px-1 py-px font-mono text-[9px] font-semibold text-primary-foreground">
-                {r.target ? `${r.target}px` : `${r.scale}x`}
-              </span>
-            </span>
           )}
         </div>
         {item.status === 'processing' && <ProgressRing progress={item.progress} />}
@@ -332,9 +356,13 @@ function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
           <StatusChip item={item} />
         </div>
 
-        <p className="mt-0.5 truncate text-[11px] text-muted-foreground tabular-nums">
-          {buildMeta(item) || item.mime}
-        </p>
+        {item.status === 'done' && r ? (
+          <AppliedChips item={item} />
+        ) : (
+          <p className="mt-0.5 truncate text-[11px] text-muted-foreground tabular-nums">
+            {buildMeta(item) || item.mime}
+          </p>
+        )}
 
         {item.status === 'processing' && (
           <div className="mt-1.5 flex items-center gap-2">
@@ -358,6 +386,7 @@ function QueueItemRow({ item, index }: { item: QueueItem; index: number }) {
             {item.error}
           </p>
         )}
+        {item.status === 'done' && <AppliedNotice item={item} />}
       </div>
 
       <ItemActions item={item} />
@@ -380,7 +409,7 @@ function QueueCard({ item, index }: { item: QueueItem; index: number }) {
       )}
     >
       {/* thumbnail stage */}
-      <div className="relative aspect-square w-full overflow-hidden rounded-md border bg-muted bg-[repeating-conic-gradient(var(--border)_0%_25%,transparent_0%_50%)] bg-[length:12px_12px]">
+      <div className="relative aspect-square w-full overflow-hidden rounded-md border bg-[repeating-conic-gradient(var(--border)_0%_25%,transparent_0%_50%)] bg-[length:12px_12px]">
         {item.thumbUrl ? (
           <img
             src={item.thumbUrl}
@@ -392,14 +421,23 @@ function QueueCard({ item, index }: { item: QueueItem; index: number }) {
           />
         ) : (
           <div className="flex h-full w-full items-center justify-center text-muted-foreground">
-            <X className="h-5 w-5" aria-hidden />
+            <MaterialIcon name="close" size={18} />
           </div>
         )}
 
-        {/* badges */}
         {r && (
           <span className="absolute left-1.5 top-1.5 flex flex-nowrap items-center gap-1 whitespace-nowrap">
-            <span className="shrink-0 rounded-sm bg-primary px-1.5 py-px font-mono text-[9px] font-semibold text-primary-foreground">
+            <span
+              className={cn(
+                'inline-flex shrink-0 items-center rounded-sm px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide',
+                r.engine === 'ai'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-black/60 text-white'
+              )}
+            >
+              {r.engine === 'ai' ? 'AI' : 'Std'}
+            </span>
+            <span className="shrink-0 rounded-sm bg-black/60 px-1.5 py-px font-mono text-[9px] font-semibold text-white">
               {r.target ? `${r.target}px` : `${r.scale}x`}
             </span>
             <span className="shrink-0 rounded-sm bg-black/60 px-1 py-px font-mono text-[9px] font-semibold text-white">
@@ -408,17 +446,14 @@ function QueueCard({ item, index }: { item: QueueItem; index: number }) {
           </span>
         )}
 
-        {/* status chip overlays the top when not done */}
         {item.status !== 'done' && (
           <span className="absolute right-1.5 top-1.5">
             <StatusChip item={item} />
           </span>
         )}
 
-        {/* ZIP selection for finished items */}
         {item.status === 'done' && <ZipToggle item={item} className="absolute right-1.5 top-1.5" />}
 
-        {/* centered progress ring while processing */}
         {item.status === 'processing' && (
           <div className="absolute inset-0 flex items-center justify-center bg-background/40">
             <div className="relative h-12 w-12">
@@ -430,15 +465,14 @@ function QueueCard({ item, index }: { item: QueueItem; index: number }) {
           </div>
         )}
 
-        {/* hover compare affordance */}
         {r && item.status === 'done' && (
           <button
             type="button"
-            aria-label={`Compare ${item.name}`}
+            aria-label={`Compare ${item.name} with the original`}
             onClick={() => useStore.getState().setCompare(item.id)}
             className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all duration-200 hover:bg-black/40 hover:opacity-100 focus-visible:opacity-100"
           >
-            <Eye className="h-6 w-6 text-white drop-shadow" aria-hidden />
+            <MaterialIcon name="compare" size={26} className="text-white drop-shadow" />
           </button>
         )}
       </div>
@@ -448,9 +482,18 @@ function QueueCard({ item, index }: { item: QueueItem; index: number }) {
         <p className="truncate text-xs font-medium" title={item.name}>
           {item.name}
         </p>
-        <p className="truncate text-[10px] text-muted-foreground tabular-nums">
-          {buildMeta(item) || item.mime}
-        </p>
+        {item.status === 'done' && r ? (
+          <>
+            <p className="truncate font-mono text-[10px] tabular-nums text-muted-foreground">
+              {r.w}×{r.h} · {formatBytes(r.size)} · {formatDuration(r.ms)}
+            </p>
+            <AppliedNotice item={item} />
+          </>
+        ) : (
+          <p className="truncate text-[10px] text-muted-foreground tabular-nums">
+            {buildMeta(item) || item.mime}
+          </p>
+        )}
         {item.status === 'processing' && (
           <div className="flex items-center gap-1.5 pt-0.5">
             <Progress
@@ -495,7 +538,6 @@ export function Queue() {
   const queuedCount = items.filter((i) => i.status === 'queued').length;
   const failedCount = items.filter((i) => (i.status === 'error' || i.status === 'canceled') && i.file).length;
   const zipCount = items.filter((i) => i.status === 'done' && i.result && i.zip !== false).length;
-  // with parallel processing several items advance at once: average them all
   const processingSum = items
     .filter((i) => i.status === 'processing')
     .reduce((acc, i) => acc + i.progress, 0);
@@ -505,7 +547,6 @@ export function Queue() {
   const hasDone = doneCount > 0;
   const hasQueued = queuedCount > 0;
 
-  // rough ETA from the session average, meaningful once one image finished
   const avgMs = totals.images > 0 ? totals.ms / totals.images : 0;
   const eta =
     busy && !paused && hasQueued && avgMs > 0
@@ -525,13 +566,13 @@ export function Queue() {
           <div className="flex flex-wrap items-center gap-2">
             {busy && !paused && (
               <Button size="sm" variant="outline" className="h-8 gap-1.5" onClick={togglePause} disabled={!hasQueued}>
-                <Pause className="h-3.5 w-3.5" aria-hidden />
+                <MaterialIcon name="pause" size={15} />
                 Pause
               </Button>
             )}
             {paused && (
               <Button size="sm" variant="outline" className="h-8 gap-1.5" onClick={togglePause} disabled={!hasQueued}>
-                <Play className="h-3.5 w-3.5" aria-hidden />
+                <MaterialIcon name="play_arrow" size={15} />
                 Resume
               </Button>
             )}
@@ -549,7 +590,7 @@ export function Queue() {
                           .forEach((i) => retry(i.id));
                       }}
                     >
-                      <RotateCcw className="h-3.5 w-3.5" aria-hidden />
+                      <MaterialIcon name="restart_alt" size={15} />
                       Retry failed
                       <span className="font-mono text-[10px] text-muted-foreground">({failedCount})</span>
                     </Button>
@@ -568,7 +609,7 @@ export function Queue() {
                     onClick={() => void downloadAllAsZip()}
                     disabled={zipCount === 0}
                   >
-                    <FileArchive className="h-3.5 w-3.5" aria-hidden />
+                    <MaterialIcon name="folder_zip" size={15} />
                     ZIP all
                     <span className="font-mono text-[10px] text-muted-foreground">
                       ({zipCount}
@@ -596,7 +637,7 @@ export function Queue() {
               className="h-8 text-muted-foreground hover:text-destructive"
               onClick={clearAll}
             >
-              <Trash2 className="h-3.5 w-3.5" aria-hidden />
+              <MaterialIcon name="delete" size={15} />
               Clear all
             </Button>
           </div>
@@ -608,13 +649,13 @@ export function Queue() {
                 className="gap-1 font-mono text-[10px] tabular-nums text-muted-foreground"
                 title={`Based on the ${formatDuration(avgMs)} average of this session`}
               >
-                <Timer className="h-3 w-3" aria-hidden />
+                <MaterialIcon name="timer" size={12} />
                 ~{formatDuration(eta)} left
               </Badge>
             )}
             <Badge variant="outline" className="gap-1 font-mono text-[10px] text-muted-foreground">
-              <Cloud className="h-3 w-3" aria-hidden />
-              Cloud
+              <MaterialIcon name="cloud_done" size={12} />
+              Server
             </Badge>
             <Badge variant="outline" className="font-mono text-[10px] tabular-nums text-muted-foreground">
               {doneCount}/{items.length} done
@@ -632,7 +673,7 @@ export function Queue() {
                       onClick={openShortcuts}
                       className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                     >
-                      <Keyboard className="h-3.5 w-3.5" aria-hidden />
+                      <MaterialIcon name="keyboard" size={15} />
                     </button>
                   </TooltipTrigger>
                   <TooltipContent>Keyboard shortcuts</TooltipContent>
@@ -650,7 +691,7 @@ export function Queue() {
                     view === 'list' ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                   )}
                 >
-                  <LayoutList className="h-3.5 w-3.5" aria-hidden />
+                  <MaterialIcon name="view_list" size={15} />
                 </button>
                 <button
                   type="button"
@@ -663,7 +704,7 @@ export function Queue() {
                     view === 'grid' ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                   )}
                 >
-                  <LayoutGrid className="h-3.5 w-3.5" aria-hidden />
+                  <MaterialIcon name="grid_view" size={15} />
                 </button>
               </div>
             </div>

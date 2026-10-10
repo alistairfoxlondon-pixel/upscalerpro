@@ -135,6 +135,24 @@
   }
 }
 
+/* Google Material Symbols (Rounded) icon ligatures */
+.ms-icon {
+  font-family: 'Material Symbols Rounded';
+  font-weight: normal;
+  font-style: normal;
+  font-size: 24px;
+  line-height: 1;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  letter-spacing: normal;
+  text-transform: none;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
 /* nicer scrollbars for long lists */
 .fancy-scroll {
   scrollbar-width: thin;
@@ -155,22 +173,17 @@
   background: transparent;
 }
 
-/* animated stripes inside progress bars while busy */
+/* progress indicator breathes while the server works (flat, no gradients) */
 .pf-stripes [data-slot='progress-indicator'] {
-  background-image: repeating-linear-gradient(
-    45deg,
-    rgba(255, 255, 255, 0.28) 0 5px,
-    transparent 5px 10px
-  );
-  background-size: 14px 14px;
-  animation: pf-stripes 0.7s linear infinite;
+  animation: pf-breathe 1.2s ease-in-out infinite;
 }
-@keyframes pf-stripes {
-  from {
-    background-position: 0 0;
+@keyframes pf-breathe {
+  0%,
+  100% {
+    opacity: 0.75;
   }
-  to {
-    background-position: 14px 0;
+  50% {
+    opacity: 1;
   }
 }
 
@@ -272,6 +285,16 @@
   animation: pf-pop 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+/* spinner for the Material Symbols activity icon */
+@keyframes pf-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.pf-spin {
+  animation: pf-spin 0.9s linear infinite;
+}
+
 /* respect reduced-motion everywhere */
 @media (prefers-reduced-motion: reduce) {
   .pf-rise,
@@ -279,6 +302,8 @@
   .pf-pop,
   .pf-fade,
   .pf-fade-up,
+  .pf-pulse,
+  .pf-spin,
   .pf-stripes [data-slot='progress-indicator'] {
     animation: none !important;
   }

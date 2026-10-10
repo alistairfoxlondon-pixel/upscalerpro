@@ -1,8 +1,8 @@
 'use client';
 
 import * as React from 'react';
-import { CloudUpload, ImagePlus, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { MaterialIcon } from './material-icon';
 import { useStore } from '@/lib/upscaler/store';
 import { SAMPLES } from '@/lib/upscaler/utils';
 
@@ -88,9 +88,9 @@ export function Dropzone() {
         )}
       >
         {dragging ? (
-          <ImagePlus className="pf-wiggle h-6 w-6" aria-hidden />
+          <MaterialIcon name="add_photo_alternate" filled size={hasItems ? 24 : 30} className="pf-wiggle" />
         ) : (
-          <CloudUpload className={cn(hasItems ? 'h-5 w-5' : 'h-7 w-7')} aria-hidden />
+          <MaterialIcon name="upload" size={hasItems ? 20 : 28} />
         )}
       </span>
 
@@ -120,7 +120,7 @@ export function Dropzone() {
                 hasItems ? 'h-6 px-2 text-[10px]' : 'h-9 px-3 text-xs'
               )}
             >
-              <Sparkles className={cn('text-primary', hasItems ? 'h-3 w-3' : 'h-3.5 w-3.5')} aria-hidden />
+              <MaterialIcon name="photo" filled size={hasItems ? 13 : 15} className="text-primary" />
               {s.label}
             </button>
           ))}

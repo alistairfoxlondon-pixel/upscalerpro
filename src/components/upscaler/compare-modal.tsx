@@ -1,7 +1,6 @@
 'use client';
 
 import * as React from 'react';
-import { Download, Copy, Share2, SlidersHorizontal, Columns2 } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -15,6 +14,7 @@ import { CompareSlider } from './compare-slider';
 import { CompareSideBySide } from './compare-side';
 import { downloadBlob, resultFilename, useStore } from '@/lib/upscaler/store';
 import { copyImageToClipboard, formatBytes, formatDuration } from '@/lib/upscaler/utils';
+import { MaterialIcon } from './material-icon';
 import { cn } from '@/lib/utils';
 
 type CompareMode = 'slider' | 'side';
@@ -100,6 +100,16 @@ export function CompareModal() {
                     {r.w}×{r.h}
                   </span>
                 </span>
+                <Badge
+                  variant="secondary"
+                  className={cn(
+                    'gap-1 font-mono text-[10px]',
+                    r.engine === 'ai' && 'bg-primary text-primary-foreground'
+                  )}
+                >
+                  <MaterialIcon name={r.engine === 'ai' ? 'neurology' : 'speed'} size={12} />
+                  {r.engine === 'ai' ? 'AI' : 'Standard'}
+                </Badge>
                 <Badge variant="secondary" className="font-mono text-[10px]">
                   {r.target ? `${r.target}px` : `${r.scale}x output`}
                 </Badge>
@@ -119,9 +129,9 @@ export function CompareModal() {
                   aria-label="Compare mode"
                 >
                   {([
-                    { id: 'slider' as const, label: 'Slider', Icon: SlidersHorizontal },
-                    { id: 'side' as const, label: 'Side by side', Icon: Columns2 },
-                  ]).map(({ id, label, Icon }) => (
+                    { id: 'slider' as const, label: 'Slider', icon: 'compare' },
+                    { id: 'side' as const, label: 'Side by side', icon: 'splitscreen' },
+                  ]).map(({ id, label, icon }) => (
                     <button
                       key={id}
                       type="button"
@@ -134,7 +144,11 @@ export function CompareModal() {
                           : 'text-muted-foreground hover:text-foreground'
                       )}
                     >
-                      <Icon className={cn('h-3.5 w-3.5', mode === id && 'text-primary')} aria-hidden />
+                      <MaterialIcon
+                        name={icon}
+                        size={15}
+                        className={cn(mode === id && 'text-primary')}
+                      />
                       {label}
                     </button>
                   ))}
@@ -167,12 +181,12 @@ export function CompareModal() {
 
             <div className="mt-4 grid grid-cols-2 gap-2 sm:flex sm:justify-end">
               <Button variant="outline" onClick={() => void onCopy()}>
-                <Copy className="h-4 w-4" aria-hidden />
+                <MaterialIcon name="content_copy" size={17} />
                 Copy
               </Button>
               {canShare && (
                 <Button variant="outline" onClick={() => void onShare()}>
-                  <Share2 className="h-4 w-4" aria-hidden />
+                  <MaterialIcon name="share" size={17} />
                   Share
                 </Button>
               )}
@@ -183,7 +197,7 @@ export function CompareModal() {
                 Open full size
               </Button>
               <Button onClick={() => void onDownload()}>
-                <Download className="h-4 w-4" aria-hidden />
+                <MaterialIcon name="download" size={17} />
                 Download {r.format.toUpperCase()}
               </Button>
             </div>

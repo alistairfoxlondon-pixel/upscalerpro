@@ -2,8 +2,8 @@
 
 import * as React from 'react';
 import { useTheme } from 'next-themes';
-import { Moon, Sun } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { MaterialIcon } from './material-icon';
 
 export function ThemeToggle() {
   const { resolvedTheme, setTheme } = useTheme();
@@ -15,13 +15,13 @@ export function ThemeToggle() {
       variant="ghost"
       size="icon"
       className="h-9 w-9"
-      aria-label="Toggle theme"
+      aria-label="Toggle dark mode"
       onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
     >
       {mounted && resolvedTheme === 'dark' ? (
-        <Sun className="h-4 w-4" aria-hidden />
+        <MaterialIcon name="light_mode" size={20} />
       ) : (
-        <Moon className="h-4 w-4" aria-hidden />
+        <MaterialIcon name="dark_mode" size={20} />
       )}
     </Button>
   );

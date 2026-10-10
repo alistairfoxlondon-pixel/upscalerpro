@@ -1,6 +1,6 @@
-/** Shared types for the PixelForge client. Processing happens server side. */
+/** Shared types for Upscaler Pro. Processing happens server side. */
 
-export type PresetId = 'fast' | 'balanced' | 'studio';
+export type EngineChoice = 'standard' | 'ai';
 export type ScaleFactor = 2 | 3 | 4 | 8;
 export type OutputFormat = 'jpeg' | 'png' | 'webp';
 export type FormatChoice = OutputFormat | 'auto';
@@ -8,6 +8,7 @@ export type FormatChoice = OutputFormat | 'auto';
 export type ScaleMode = 'factor' | 'target';
 
 export interface Settings {
+  engine: EngineChoice;
   scale: ScaleFactor;
   scaleMode: ScaleMode;
   /** target longest side in px (target mode) */
@@ -15,11 +16,11 @@ export interface Settings {
   format: FormatChoice;
   /** encoder quality for jpeg / webp (0.5..1) */
   jpegQuality: number;
-  /** 0 = off, 1 = light median, 2 = strong median */
+  /** 0 = off, 1 = light blur, 2 = strong median (standard engine) */
   denoise: 0 | 1 | 2;
   /** unsharp mask after upscaling */
   sharpen: boolean;
-  /** keep camera metadata in JPEG outputs */
+  /** keep camera metadata in JPEG outputs (standard engine) */
   keepExif: boolean;
   queueView: 'list' | 'grid';
   compareMode: 'slider' | 'side';
@@ -37,6 +38,14 @@ export interface ResultData {
   clamped: boolean;
   /** target mode: exact longest side the output was sized to */
   target?: number;
+  /** engine that actually produced this result */
+  engine: EngineChoice;
+  /** AI engine tile count (0 for standard) */
+  tiles?: number;
+  /** server reduced the requested scale to fit the caps */
+  capped?: boolean;
+  /** AI skipped because the image exceeded the AI input budget */
+  aiFallback?: boolean;
 }
 
 export interface QueueItem {

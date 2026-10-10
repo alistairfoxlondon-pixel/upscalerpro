@@ -16,18 +16,18 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "PixelForge: Free AI Image Upscaler",
+  title: "Upscaler Pro: Free AI Image Upscaler",
   description:
-    "Enlarge photos up to 8x with sharper detail. Fast server side processing, batch ZIP export, JPEG PNG and WebP output. Files are processed in memory and never stored.",
+    "Enlarge images up to 8x with real AI detail. Server side processing, batch ZIP export, live before and after compare. Files are never stored.",
   keywords: [
     "image upscaler",
     "AI upscaling",
     "enlarge image",
     "photo enhancer",
     "upscale image online",
-    "batch upscale",
+    "Real-ESRGAN",
   ],
-  authors: [{ name: "PixelForge" }],
+  authors: [{ name: "Upscaler Pro" }],
   icons: {
     icon: "/icon.svg",
     apple: "/icon-192.png",
@@ -35,20 +35,20 @@ export const metadata: Metadata = {
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
-    title: "PixelForge",
+    title: "Upscaler Pro",
     statusBarStyle: "black-translucent",
   },
   openGraph: {
-    title: "PixelForge: Free AI Image Upscaler",
+    title: "Upscaler Pro: Free AI Image Upscaler",
     description:
-      "Enlarge photos up to 8x with sharper detail. Files are processed in memory and never stored.",
+      "Enlarge images up to 8x with real AI detail. Files are never stored.",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "PixelForge: Free AI Image Upscaler",
+    title: "Upscaler Pro: Free AI Image Upscaler",
     description:
-      "Enlarge photos up to 8x with sharper detail. Files are processed in memory and never stored.",
+      "Enlarge images up to 8x with real AI detail. Files are never stored.",
   },
 };
 
@@ -66,6 +66,14 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link
+          rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=block"
+        />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >

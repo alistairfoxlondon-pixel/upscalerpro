@@ -1,5 +1,5 @@
 /* PixelForge minimal service worker: static assets only. */
-const VERSION = 'pf-v2';
+const VERSION = 'up-v3';
 const ASSET_CACHE = `${VERSION}-assets`;
 const PAGE_CACHE = `${VERSION}-pages`;
 
