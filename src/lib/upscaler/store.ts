@@ -26,6 +26,7 @@ import { makePreviewUrl, makeThumbUrl } from './utils';
 export type { QueueItem } from './types';
 
 export const DEFAULT_SETTINGS: Settings = {
+  engine: 'standard',
   scale: 2,
   scaleMode: 'factor',
   targetSide: 1920,
@@ -101,6 +102,14 @@ interface ServerResult {
   width: number;
   height: number;
   ms: number;
+  applied: {
+    engine: 'standard' | 'ai';
+    scale: number;
+    format: string;
+    tiles: number;
+    capped: boolean;
+    aiFallback: boolean;
+  };
 }
 
 /** Upload one file to /api/upscale with live progress. */
@@ -176,7 +185,17 @@ function processViaServer(
         const width = Number(xhr.getResponseHeader('X-Image-Width')) || 0;
         const height = Number(xhr.getResponseHeader('X-Image-Height')) || 0;
         const ms = Number(xhr.getResponseHeader('X-Process-Ms')) || 0;
-        resolve({ blob: xhr.response as Blob, width, height, ms });
+        const applied = {
+          engine: (xhr.getResponseHeader('X-Applied-Engine') === 'ai'
+            ? 'ai'
+            : 'standard') as 'standard' | 'ai',
+          scale: Number(xhr.getResponseHeader('X-Applied-Scale')) || 0,
+          format: xhr.getResponseHeader('X-Applied-Format') || '',
+          tiles: Number(xhr.getResponseHeader('X-Ai-Tiles')) || 0,
+          capped: xhr.getResponseHeader('X-Capped') === '1',
+          aiFallback: xhr.getResponseHeader('X-Ai-Fallback') === '1',
+        };
+        resolve({ blob: xhr.response as Blob, width, height, ms, applied });
       } else {
         const fail = (msg: string) => reject(new Error(msg));
         const body = xhr.response;
@@ -297,10 +316,25 @@ async function processItem(id: string): Promise<void> {
     scale: fit.scale,
     format: resolved,
     clamped: fit.clamped ?? false,
+    engine: fit.aiFallback ? 'standard' : settings.engine,
+    tiles: 0,
+    capped: fit.clamped ?? false,
+    aiFallback: fit.aiFallback ?? false,
     target:
       settings.scaleMode === 'target' && !fit.short && !fit.error ? settings.targetSide : undefined,
   };
   patchItem(id, { result: planned });
+
+  const buildParams = (): Record<string, string> => ({
+    engine: fit.aiFallback ? 'standard' : settings.engine,
+    scale: String(fit.scale),
+    target: planned.target ? String(planned.target) : '',
+    denoise: String(settings.denoise),
+    sharpen: settings.sharpen ? '1' : '0',
+    format: resolved,
+    quality: String(settings.jpegQuality),
+    exif: settings.keepExif && resolved === 'jpeg' ? '1' : '0',
+  });
 
   try {
     let upload: Blob = item.file;
@@ -314,26 +348,35 @@ async function processItem(id: string): Promise<void> {
       });
     }
 
-    const res = await processViaServer(
-      id,
-      upload,
-      {
-        scale: String(fit.scale),
-        target: planned.target ? String(planned.target) : '',
-        denoise: String(settings.denoise),
-        sharpen: settings.sharpen ? '1' : '0',
-        format: resolved,
-        quality: String(settings.jpegQuality),
-        exif: settings.keepExif && resolved === 'jpeg' ? '1' : '0',
-      },
-      (progress, phase, speed) =>
+    let res: ServerResult;
+    try {
+      res = await processViaServer(id, upload, buildParams(), (progress, phase, speed) =>
         patchItem(id, {
           progress,
           phase,
           // keep the hint only while a transfer is actually running
           speed: phase === 'Uploading' || phase === 'Downloading' ? speed : undefined,
         })
-    );
+      );
+    } catch (err) {
+      // a 413 from the platform body limit: re-encode once and retry so the
+      // user never sees a raw upload error
+      const msg = err instanceof Error ? err.message : '';
+      if (/(413|too large|payload)/i.test(msg) && !item.optimized) {
+        patchItem(id, { phase: 'Optimizing' });
+        upload = await fitUpload(item.file);
+        patchItem(id, { optimized: true });
+        res = await processViaServer(id, upload, buildParams(), (progress, phase, speed) =>
+          patchItem(id, {
+            progress,
+            phase,
+            speed: phase === 'Uploading' || phase === 'Downloading' ? speed : undefined,
+          })
+        );
+      } else {
+        throw err;
+      }
+    }
 
     const url = URL.createObjectURL(res.blob);
     const result: ResultData = {
@@ -342,13 +385,17 @@ async function processItem(id: string): Promise<void> {
       w: res.width || fit.outW,
       h: res.height || fit.outH,
       ms: res.ms,
-      scale: fit.scale,
+      scale: (res.applied.scale || fit.scale) as ScaleFactor,
       format: res.blob.type.includes('jpeg')
         ? 'jpeg'
         : res.blob.type.includes('webp')
           ? 'webp'
           : 'png',
-      clamped: fit.clamped ?? false,
+      clamped: res.applied.capped || (fit.clamped ?? false),
+      engine: res.applied.engine,
+      tiles: res.applied.tiles,
+      capped: res.applied.capped,
+      aiFallback: res.applied.aiFallback,
       target: planned.target,
     };
     patchItem(id, { status: 'done', progress: 1, phase: 'Done', result });
@@ -415,6 +462,8 @@ async function savePersisted(item: QueueItem, blob: Blob, result: ResultData) {
         format: result.format,
         clamped: result.clamped,
         target: result.target,
+        engine: result.engine,
+        tiles: result.tiles,
       },
       savedAt: Date.now(),
     };
@@ -715,6 +764,8 @@ export const useStore = create<UpscalerState>()(
               scale: row.result.scale,
               format: row.result.format,
               clamped: row.result.clamped,
+              engine: row.result.engine ?? 'standard',
+              tiles: row.result.tiles ?? 0,
               target: row.result.target,
             },
             restored: true,

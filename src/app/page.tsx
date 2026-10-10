@@ -2,6 +2,7 @@ import { SiteHeader } from '@/components/upscaler/site-header';
 import { Hero } from '@/components/upscaler/hero';
 import { Workspace } from '@/components/upscaler/workspace';
 import { SiteFooter } from '@/components/upscaler/site-footer';
+import { ScrollTop } from '@/components/upscaler/scroll-top';
 
 export default function Home() {
   return (
@@ -12,6 +13,7 @@ export default function Home() {
         <Workspace />
       </main>
       <SiteFooter />
+      <ScrollTop />
     </div>
   );
 }

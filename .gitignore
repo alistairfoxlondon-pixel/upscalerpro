@@ -62,3 +62,5 @@ server.log
 /db
 /prisma
 /worklog.md
+/scripts
+/download
